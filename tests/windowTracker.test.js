@@ -318,3 +318,43 @@ describe("WindowTracker — drift unsnap", () => {
         assert.ok(tracker.getSnapEntry(win), "entry should still exist");
     });
 });
+
+describe("WindowTracker persist (opt-in)", () => {
+    beforeEach(() => setupGnomeGlobals());
+
+    function persistSettings() {
+        let store = [];
+        return {
+            snapAssistEnabled: false,
+            windowGapSize: 0,
+            persistSnapGroups: true,
+            get snapGroupMemory() { return store; },
+            set snapGroupMemory(v) { store = v; },
+        };
+    }
+
+    it("serializes and reloads app placements", () => {
+        const settings = persistSettings();
+        const wt = new WindowTracker(settings, makeZoneManager(), null, null);
+
+        wt._persistMemory.set("org.example.App.desktop", { presetId: "halves", zoneIndex: 1, monitorIndex: 0 });
+        wt._savePersist();
+        assert.deepEqual(settings.snapGroupMemory, ["org.example.App.desktop|halves|1|0"]);
+
+        wt._persistMemory.clear();
+        wt._loadPersist();
+        const p = wt._persistMemory.get("org.example.App.desktop");
+        assert.equal(p.presetId, "halves");
+        assert.equal(p.zoneIndex, 1);
+        assert.equal(p.monitorIndex, 0);
+    });
+
+    it("does not load anything when persistence is disabled", () => {
+        const settings = persistSettings();
+        settings.persistSnapGroups = false;
+        settings.snapGroupMemory = ["org.example.App.desktop|halves|1|0"];
+        const wt = new WindowTracker(settings, makeZoneManager(), null, null);
+        wt._loadPersist();
+        assert.equal(wt._persistMemory.size, 0);
+    });
+});

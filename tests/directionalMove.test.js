@@ -9,7 +9,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { classifySlot, resolveMove, slotFromEntry, SLOT_MOVES } from "../src/directionalMove.js";
+import { classifySlot, resolveMove, slotFromEntry, SLOT_MOVES, zoneIndexForRect, neighborZoneIndex } from "../src/directionalMove.js";
 
 const WA = { x: 0, y: 0, width: 1920, height: 1080 };
 
@@ -121,6 +121,47 @@ describe("slotFromEntry", () => {
         // authoritative, so Down still resolves to bottom-right.
         const slot = slotFromEntry({ presetId: "quarters", zoneIndex: 1 });
         assert.deepEqual(resolveMove(slot, "down"), ["quarters", 3]);
+    });
+});
+
+// ── Layout-aware navigation (the "half + 2 quarters" bug) ───────────────────
+
+describe("neighborZoneIndex — half-quarters layout", () => {
+    // half-quarters: [left full-height, right-top quarter, right-bottom quarter]
+    const rects = [
+        { x: 0,   y: 0,   width: 960, height: 1080 }, // 0: left half
+        { x: 960, y: 0,   width: 960, height: 540  }, // 1: right top
+        { x: 960, y: 540, width: 960, height: 540  }, // 2: right bottom
+    ];
+
+    it("left half → right yields right-top", () => {
+        assert.equal(neighborZoneIndex(rects, 0, "right"), 1);
+    });
+    it("right-top → left yields left half", () => {
+        assert.equal(neighborZoneIndex(rects, 1, "left"), 0);
+    });
+    it("right-top → down yields right-bottom", () => {
+        assert.equal(neighborZoneIndex(rects, 1, "down"), 2);
+    });
+    it("right-bottom → up yields right-top", () => {
+        assert.equal(neighborZoneIndex(rects, 2, "up"), 1);
+    });
+    it("left half → left is a no-op (outer edge)", () => {
+        assert.equal(neighborZoneIndex(rects, 0, "left"), -1);
+    });
+    it("right-top → up is a no-op (no zone above, non-adjacent skipped)", () => {
+        assert.equal(neighborZoneIndex(rects, 1, "up"), -1);
+    });
+});
+
+describe("zoneIndexForRect", () => {
+    const rects = [
+        { x: 0,   y: 0, width: 960, height: 1080 },
+        { x: 960, y: 0, width: 960, height: 1080 },
+    ];
+    it("matches the zone a window most overlaps", () => {
+        assert.equal(zoneIndexForRect(rects, { x: 970, y: 10, width: 900, height: 1000 }), 1);
+        assert.equal(zoneIndexForRect(rects, { x: 10, y: 10, width: 900, height: 1000 }), 0);
     });
 });
 

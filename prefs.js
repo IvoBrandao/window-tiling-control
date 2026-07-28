@@ -112,12 +112,20 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             "Master switch for all window tiling features"
         ));
 
-        // Window gap
+        // Inner gap (between tiled windows)
         group.add(this._spinRow(
             settings, "window-gap-size",
-            "Window Gap (px)",
-            "Gap between tiled windows",
+            "Inner Gap (px)",
+            "Gap between adjacent tiled windows",
             0, 40, 1
+        ));
+
+        // Outer gap (screen-edge)
+        group.add(this._spinRow(
+            settings, "outer-gap-size",
+            "Outer Gap (px)",
+            "Gap between tiled windows and the screen edges (0 = follow inner gap)",
+            0, 80, 1
         ));
 
         // Drag edge threshold
@@ -157,6 +165,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             ["snap-assist-enabled",        "Snap Assist",               "Show window thumbnails for remaining zones after snapping"],
             ["drag-zone-highlight-enabled","Zone Highlights on Drag",   "Highlight zones while dragging a window"],
             ["snap-groups-enabled",        "Snap Groups in Panel",      "Show snap group button in the top panel"],
+            ["persist-snap-groups",        "Remember Apps Across Relaunch", "Re-snap an app to its last zone when it reopens (if free)"],
         ];
 
         for (const [key, title, subtitle] of rows)
@@ -183,10 +192,16 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             1, 30, 1
         ));
 
+        timingGroup.add(this._switchRow(
+            settings, "animations-enabled",
+            "Enable Animations",
+            "Master switch — turn off for instant, animation-free snapping"
+        ));
+
         timingGroup.add(this._comboRow(
             settings, "animation-speed",
             "Animation Speed",
-            "Speed of snap and overlay animations",
+            "Speed of snap and overlay animations (ignored when animations are disabled)",
             ["Off", "Fast", "Normal", "Slow"]
         ));
 

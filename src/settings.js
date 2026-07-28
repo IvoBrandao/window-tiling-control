@@ -36,8 +36,21 @@ export class Settings {
     get snapAssistEnabled() { return this._settings.get_boolean("snap-assist-enabled"); }
     get dragHighlightEnabled() { return this._settings.get_boolean("drag-zone-highlight-enabled"); }
     get snapGroupsEnabled() { return this._settings.get_boolean("snap-groups-enabled"); }
+    get persistSnapGroups() { return this._get("boolean", "persist-snap-groups", false); }
+
+    get snapGroupMemory() { return this._get("strv", "snap-group-memory", []); }
+    set snapGroupMemory(v) {
+        try { this._settings.set_strv("snap-group-memory", v); } catch (_) {}
+    }
+
+    get animationsEnabled() { return this._get("boolean", "animations-enabled", true); }
 
     get windowGapSize() { return this._settings.get_uint("window-gap-size"); }
+    /** Outer (screen-edge) gap. 0 means "follow the inner gap". */
+    get outerGapSize() {
+        const o = this._get("uint", "outer-gap-size", 0);
+        return o > 0 ? o : this.windowGapSize;
+    }
     get dragEdgeThreshold() { return this._settings.get_uint("drag-edge-threshold"); }
     get snapAssistTimeout() { return this._settings.get_uint("snap-assist-timeout"); }
     get animationSpeed() { return this._settings.get_uint("animation-speed"); }

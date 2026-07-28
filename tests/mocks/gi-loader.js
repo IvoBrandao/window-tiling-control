@@ -100,7 +100,9 @@ const GLibStub = (() => {
 
     const Source = { remove: (_id) => {} };
 
-    return { PRIORITY_DEFAULT, PRIORITY_DEFAULT_IDLE, SOURCE_REMOVE, SOURCE_CONTINUE, timeout_add, idle_add, Source };
+    const get_monotonic_time = () => Date.now() * 1000;
+
+    return { PRIORITY_DEFAULT, PRIORITY_DEFAULT_IDLE, SOURCE_REMOVE, SOURCE_CONTINUE, timeout_add, idle_add, Source, get_monotonic_time };
 })();
 
 // ── Meta.Rectangle (pure data class used extensively) ────────────────────────

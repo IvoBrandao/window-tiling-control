@@ -133,17 +133,36 @@ describe("SnapAssist", () => {
             assert.notEqual(assist._dismissTimerId, null);
         });
 
-        it("closes all overlays when a window gains focus", () => {
-            windowTracker = makeWindowTracker([makeWindow()]);
+        it("closes overlays when an UNOFFERED window gains focus (after arming)", () => {
+            windowTracker = makeWindowTracker([makeWindow(1)]);
             assist = new SnapAssist(settings, windowTracker, zoneManager, animations, makeLogger());
 
             const zone = { rect: new Rect(960, 0, 960, 1080), zoneIndex: 1 };
             assist.show("halves", 0, 0, [zone]);
             assert.equal(assist._overlays.length, 1);
 
-            // Focusing any window should dismiss the remaining-zone previews.
+            // Simulate the arming grace period having elapsed.
+            assist._armedUntil = 0;
+
+            // Focusing a window that ISN'T one of the offered thumbnails (id 99)
+            // means the user moved on → dismiss the previews.
+            global.display._setFocusWindow({ get_id: () => 99 });
             global.display._emit("notify::focus-window");
             assert.equal(assist._overlays.length, 0);
+        });
+
+        it("keeps overlays when the just-snapped window settles focus (arming)", () => {
+            windowTracker = makeWindowTracker([makeWindow(1)]);
+            assist = new SnapAssist(settings, windowTracker, zoneManager, animations, makeLogger());
+
+            const zone = { rect: new Rect(960, 0, 960, 1080), zoneIndex: 1 };
+            assist.show("halves", 0, 0, [zone]);
+
+            // During arming, a focus event must NOT tear the previews down —
+            // this is the "selectors vanish before you can click" regression.
+            global.display._setFocusWindow({ get_id: () => 42 });
+            global.display._emit("notify::focus-window");
+            assert.equal(assist._overlays.length, 1);
         });
     });
 

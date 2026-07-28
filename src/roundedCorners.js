@@ -120,8 +120,18 @@ export class RoundedCorners {
 
     _disconnectWindowSignals() {
         for (const id of this._signalIds)
-            global.display.disconnect(id);
+            try { global.display.disconnect(id); } catch (_) {}
         this._signalIds = [];
+
+        // Drop the per-window handlers connected in _applyToWindow.
+        for (const actor of global.get_window_actors?.() ?? []) {
+            const ids = actor._wtcRCSignals;
+            if (!ids) continue;
+            const win = actor.meta_window;
+            for (const id of ids)
+                try { win?.disconnect(id); } catch (_) {}
+            actor._wtcRCSignals = null;
+        }
     }
 
     _getAllWindows() {

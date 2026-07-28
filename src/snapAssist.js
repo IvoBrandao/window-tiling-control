@@ -28,6 +28,10 @@ export class SnapAssist {
         this._overlays = [];
         this._dismissTimerId = null;
         this._focusSignalId = null;
+        /** Window ids we're offering as thumbnails — focusing one is expected. */
+        this._offeredIds = new Set();
+        /** Monotonic time before which focus changes are ignored (arming). */
+        this._armedUntil = 0;
     }
 
     // ------------------------------------------------------------------ public
@@ -47,6 +51,8 @@ export class SnapAssist {
         const unsnapped = this._windowTracker.getUnsnappedWindows(monitorIndex, workspaceIndex);
         if (unsnapped.length === 0) return;
 
+        this._offeredIds = new Set(unsnapped.map(w => w.get_id()));
+
         for (const zone of remainingZones) {
             const overlay = this._buildOverlay(
                 presetId, monitorIndex, workspaceIndex, zone, unsnapped
@@ -56,19 +62,30 @@ export class SnapAssist {
 
         this._startDismissTimer();
 
-        // Close the remaining-zone previews as soon as the user commits to a
-        // window: focusing/activating any window (via click or Enter) dismisses
-        // all the other overlays. Guard against re-entrancy from our own snap.
+        // Grace period so the just-snapped window's settling focus doesn't
+        // immediately dismiss the previews.
+        this._armedUntil = GLib.get_monotonic_time() + 700 * 1000; // 700ms
+
+        // After arming, dismiss only when the user deliberately focuses a window
+        // that ISN'T one of the thumbnails we're offering (i.e. they moved on).
         if (this._focusSignalId === null) {
             this._focusSignalId = global.display.connect(
                 "notify::focus-window",
-                () => this.destroyAll()
+                () => {
+                    if (GLib.get_monotonic_time() < this._armedUntil) return;
+                    const fw = global.display.get_focus_window();
+                    if (!fw) return;
+                    if (this._offeredIds.has(fw.get_id())) return;
+                    this.destroyAll();
+                }
             );
         }
     }
 
     destroyAll() {
         this._stopDismissTimer();
+        this._offeredIds.clear();
+        this._armedUntil = 0;
 
         if (this._focusSignalId !== null) {
             global.display.disconnect(this._focusSignalId);

@@ -7,7 +7,6 @@
 
 import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
-import Meta from "gi://Meta";
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 
@@ -29,8 +28,9 @@ import { MaximizeHook } from "./src/maximizeHook.js";
 import { RoundedCorners } from "./src/roundedCorners.js";
 import { Keybindings } from "./src/keybindings.js";
 import { Indicator } from "./src/indicator.js";
-import { isFullyMaximized } from "./src/compat.js";
-import { classifySlot, resolveMove, slotFromEntry } from "./src/directionalMove.js";
+import { ShortcutsCheatsheet } from "./src/shortcutsCheatsheet.js";
+import { ResizeMode } from "./src/resizeMode.js";
+import { classifySlot, resolveMove, slotFromEntry, zoneIndexForRect, neighborZoneIndex } from "./src/directionalMove.js";
 
 // ---------------------------------------------------------------------------
 
@@ -133,6 +133,9 @@ class WindowTilingControlController {
         );
         this._windowTracker.setSnapAssist(this._snapAssist);
 
+        // Refresh the snap-groups panel button whenever windows snap/unsnap.
+        this._windowTracker.setChangeListener(() => this._snapGroups?.refresh());
+
         // Phase 9 — zone editor
         this._zoneEditor = new ZoneEditor(
             this._settings, this._customZones, this._zoneManager,
@@ -154,11 +157,20 @@ class WindowTilingControlController {
         this._keybindings = new Keybindings(this._settings, this, this._logger);
         this._keybindings.enable();
 
+        // Phase 12b — keyboard shortcuts cheat sheet (hold-to-show)
+        this._cheatsheet = new ShortcutsCheatsheet(this._settings, this._logger);
+
+        // Phase 12c — keyboard resize submode
+        this._resizeMode = new ResizeMode(
+            this._settings, this._windowTracker, this._zoneManager, this._logger
+        );
+
         // Phase 13 — quick settings indicator
         this._indicator = new Indicator(this._settings, this, this._logger);
         this._indicator.enable();
 
         // Session mode handling (lock screen)
+        this._wasLocked = false;
         this._sessionSignalId = Main.sessionMode.connect(
             "updated",
             this._onSessionModeUpdated.bind(this)
@@ -208,6 +220,8 @@ class WindowTilingControlController {
         }
 
         // Reverse order
+        this._resizeMode?.destroy();
+        this._cheatsheet?.destroy();
         this._indicator?.disable();
         this._keybindings?.disable();
         this._restoreGnomeTiling();
@@ -223,6 +237,8 @@ class WindowTilingControlController {
         this._multiMonitor?.disable();
         this._zoneManager?.destroy();
 
+        this._resizeMode = null;
+        this._cheatsheet = null;
         this._indicator = null;
         this._keybindings = null;
         this._maximizeHook = null;
@@ -246,6 +262,11 @@ class WindowTilingControlController {
         const isLocked = sessionMode.currentMode === "unlock-dialog" ||
                          sessionMode.parentMode === "unlock-dialog";
 
+        // "updated" fires on every session-mode change, not just lock/unlock;
+        // only act on an actual locked-state transition.
+        if (isLocked === this._wasLocked) return;
+        this._wasLocked = isLocked;
+
         if (isLocked) {
             this._keybindings?.disable();
             this._indicator?.hide();
@@ -266,6 +287,29 @@ class WindowTilingControlController {
         this._snapAssist?.destroyAll();
         this._zoneEditor?.close();
         this._zoneHighlighter?.clearAll();
+        this._cheatsheet?.close();
+        this._resizeMode?.exit();
+    }
+
+    /**
+     * Hold-to-show keyboard cheat sheet. Also closes any other transient overlay
+     * so two full-screen popups can't fight for input.
+     */
+    showShortcutsCheatsheet() {
+        if (!this._cheatsheet) return;
+        this._snapOverlay?.close();
+        this._snapAssist?.destroyAll();
+        this._zoneEditor?.close();
+        this._resizeMode?.exit();
+        this._cheatsheet.open();
+    }
+
+    /** Toggle the i3-style keyboard resize submode. */
+    toggleResizeMode() {
+        if (!this._resizeMode) return;
+        this._cheatsheet?.close();
+        this._snapOverlay?.close();
+        this._resizeMode.toggle();
     }
 
     _onEnabledChanged() {
@@ -301,6 +345,8 @@ class WindowTilingControlController {
      * don't conflict with WindowTilingControl.  Saves original values for restore.
      */
     _overrideGnomeTiling() {
+        // Bail if already overridden, so we never overwrite the saved originals.
+        if (this._savedGnomeBindings) return;
         this._savedGnomeBindings = {};
 
         // 1. Disable edge-tiling (drag-to-edge tiling)
@@ -458,21 +504,60 @@ class WindowTilingControlController {
         const win = global.display.get_focus_window();
         if (!win) return;
 
-        // Prefer the tracked snap entry (EXACT) over geometry. Apps that don't
-        // honour the requested size — terminals with cell increments (Ghostty),
-        // min-size/CSD apps (Nautilus) — end up slightly off their zone, so
-        // re-reading geometry would misclassify them. Fall back to geometry only
-        // for windows we've never snapped.
-        const entry = this._windowTracker.getSnapEntry(win);
-        const slot = slotFromEntry(entry) ?? this._classifySlot(win);
-        const target = slot && resolveMove(slot, direction);
-        if (!target) return; // no neighbour that way (outer edge) — no-op
+        const monitorIndex = win.get_monitor();
+        const activePreset = this._multiMonitor?.getActivePreset(monitorIndex) ?? "halves";
 
-        const [presetId, zoneIndex] = target;
-        if (presetId === "quarters")
-            this._snapWithSwap(win, "quarters", zoneIndex);
-        else
-            this.snapFocusedToPreset(presetId, zoneIndex);
+        // Plain halves/quarters use the slot model (handles unsnapped windows
+        // and edge-grow). Prefer the tracked entry over geometry so apps that
+        // don't honour the requested size aren't misclassified.
+        if (activePreset === "halves" || activePreset === "quarters") {
+            const entry = this._windowTracker.getSnapEntry(win);
+            const slot = slotFromEntry(entry) ?? this._classifySlot(win);
+            const target = slot && resolveMove(slot, direction);
+            if (!target) return; // no neighbour that way (outer edge) — no-op
+
+            const [presetId, zoneIndex] = target;
+            if (presetId === "quarters")
+                this._snapWithSwap(win, "quarters", zoneIndex);
+            else
+                this.snapFocusedToPreset(presetId, zoneIndex);
+            return;
+        }
+
+        // Any other preset: navigate the active layout's real zones by
+        // edge-adjacency.
+        const rects = this._zoneManager.getZoneRects(
+            activePreset, monitorIndex, this._settings.windowGapSize
+        );
+        if (!rects.length) return;
+
+        const entry = this._windowTracker.getSnapEntry(win);
+        let curIdx = (entry && entry.presetId === activePreset) ? entry.zoneIndex : -1;
+        if (curIdx < 0 || curIdx >= rects.length)
+            curIdx = zoneIndexForRect(rects, win.get_frame_rect());
+
+        const targetIdx = neighborZoneIndex(rects, curIdx, direction);
+        if (targetIdx < 0 || targetIdx === curIdx) return; // outer edge — no-op
+
+        this._snapWithSwapPreset(win, activePreset, curIdx, targetIdx, rects);
+    }
+
+    /**
+     * Move `win` into targetZone of an arbitrary preset, swapping with any
+     * occupant (which takes win's previous zone). Generic version of
+     * _snapWithSwap that works for any preset + precomputed zone rects.
+     */
+    _snapWithSwapPreset(win, presetId, curZone, targetZone, rects) {
+        const monitorIndex = win.get_monitor();
+        const targetRect = rects[targetZone];
+        if (!targetRect) return;
+
+        const occupant = this._windowTracker.getWindowAtZone(presetId, targetZone, monitorIndex);
+        if (occupant && occupant !== win && curZone >= 0 && rects[curZone]) {
+            // Occupant takes the mover's old zone.
+            this._windowTracker.snapWindow(occupant, presetId, curZone, rects[curZone]);
+        }
+        this._windowTracker.snapWindow(win, presetId, targetZone, targetRect);
     }
 
     snapFocusedLeft()  { this._directionalMove("left"); }
@@ -492,63 +577,69 @@ class WindowTilingControlController {
     }
 
     /**
-     * Super+Up: context-aware maximize / snap-upward.
-     *   Unsnapped            → maximize
-     *   Left half            → top-left quarter
-     *   Right half           → top-right quarter
-     *   Bottom-left quarter  → top-left quarter
-     *   Bottom-right quarter → top-right quarter
-     *   Other snapped        → maximize
+     * i3-style directional FOCUS: move keyboard focus to the nearest window in
+     * the given direction on the current workspace (across monitors). Chooses
+     * the candidate whose centre lies furthest into `direction` with the least
+     * perpendicular offset — the classic nearest-neighbour heuristic.
+     *
+     * @param {"left"|"right"|"up"|"down"} direction
      */
-    snapFocusedUp() {
+    focusDirection(direction) {
+        if (!this._windowTracker) return;
         const win = global.display.get_focus_window();
-        if (!win || !this._windowTracker) return;
+        if (!win) return;
 
-        const entry = this._windowTracker.getSnapEntry(win);
-        if (!entry) {
-            this._maximizeHook?.bypass(win.get_id());
-            win.maximize(Meta.MaximizeFlags.BOTH);
-            return;
+        const wsIndex = global.workspace_manager.get_active_workspace_index();
+        const from = win.get_frame_rect();
+        const fcx = from.x + from.width / 2;
+        const fcy = from.y + from.height / 2;
+
+        let best = null;
+        let bestScore = Infinity;
+        for (const w of this._windowTracker._getAllWindows()) {
+            if (w === win || w.minimized || w.skip_taskbar) continue;
+            const ws = w.get_workspace();
+            if (!ws || ws.index() !== wsIndex) continue;
+
+            const r = w.get_frame_rect();
+            const dx = (r.x + r.width / 2) - fcx;
+            const dy = (r.y + r.height / 2) - fcy;
+
+            let along, across;
+            switch (direction) {
+                case "left":  if (dx >= 0) continue; along = -dx; across = Math.abs(dy); break;
+                case "right": if (dx <= 0) continue; along =  dx; across = Math.abs(dy); break;
+                case "up":    if (dy >= 0) continue; along = -dy; across = Math.abs(dx); break;
+                case "down":  if (dy <= 0) continue; along =  dy; across = Math.abs(dx); break;
+                default: return;
+            }
+            // Weight perpendicular offset so aligned neighbours win ties.
+            const score = along + across * 2;
+            if (score < bestScore) { bestScore = score; best = w; }
         }
 
-        if (entry.presetId === "halves"   && entry.zoneIndex === 0) return this.snapFocusedToPreset("quarters", 0);
-        if (entry.presetId === "halves"   && entry.zoneIndex === 1) return this.snapFocusedToPreset("quarters", 1);
-        if (entry.presetId === "quarters" && entry.zoneIndex === 2) return this.snapFocusedToPreset("quarters", 0);
-        if (entry.presetId === "quarters" && entry.zoneIndex === 3) return this.snapFocusedToPreset("quarters", 1);
-
-        this._maximizeHook?.bypass(win.get_id());
-        win.maximize(Meta.MaximizeFlags.BOTH);
+        if (best) best.activate(global.get_current_time());
     }
 
     /**
-     * Super+Down: context-aware restore / snap-downward.
-     *   Maximized           → restore
-     *   Top-left quarter    → left half
-     *   Top-right quarter   → right half
-     *   Other snapped       → unsnap
-     *   Unsnapped           → minimize
+     * Snap the focused window into a zone index of the monitor's ACTIVE preset.
+     * Backs the (unbound by default) snap-to-zone-N keybindings, so they work
+     * with whatever layout is active rather than being no-ops.
+     * @param {number} zoneIndex - 0-based
      */
-    snapFocusedDown() {
+    snapFocusedToActiveZone(zoneIndex) {
+        if (!this._multiMonitor) return;
         const win = global.display.get_focus_window();
-        if (!win || !this._windowTracker) return;
-
-        if (isFullyMaximized(win)) {
-            win.unmaximize(Meta.MaximizeFlags.BOTH);
-            return;
-        }
-
-        const entry = this._windowTracker.getSnapEntry(win);
-        if (!entry) { win.minimize(); return; }
-
-        if (entry.presetId === "quarters" && entry.zoneIndex === 0) return this.snapFocusedToPreset("halves", 0);
-        if (entry.presetId === "quarters" && entry.zoneIndex === 1) return this.snapFocusedToPreset("halves", 1);
-
-        this._windowTracker.unsnapWindow(win);
+        if (!win) return;
+        const monitorIndex = win.get_monitor();
+        const presetId = this._multiMonitor.getActivePreset(monitorIndex) ?? "halves";
+        this.snapFocusedToPreset(presetId, zoneIndex);
     }
 
     toggleSnapOverlay() {
         const win = global.display.get_focus_window();
         if (!win || !this._snapOverlay) return;
+        this._cheatsheet?.close();
         if (this._snapOverlay._widget)
             this._snapOverlay.close();
         else
@@ -557,6 +648,7 @@ class WindowTilingControlController {
 
     openZoneEditor() {
         if (!this._zoneEditor) return;
+        this._cheatsheet?.close();
         // If the editor is already open, the same shortcut commits (saves)
         // the drawn layout instead of toggling it closed.
         if (this._zoneEditor.isOpen()) {

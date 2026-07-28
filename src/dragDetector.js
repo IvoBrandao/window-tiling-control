@@ -7,7 +7,9 @@
 import GObject from "gi://GObject";
 import GLib from "gi://GLib";
 import Meta from "gi://Meta";
-import { makeRect } from "./compat.js";
+
+/** Preview must dwell under the pointer this long (µs) before it activates. */
+const ACTIVATION_DELAY_US = 160 * 1000; // 160ms — matches Windows 11's feel
 
 export const DragDetector = GObject.registerClass(
     {
@@ -49,9 +51,15 @@ export const DragDetector = GObject.registerClass(
 
             this._signalIds = [];
             this._pollId = null;
+            this._enabled = false;
             this._dragging = false;
             this._draggedWindow = null;
             this._lastHoveredZone = null; // { presetId, monitorIndex, rect, zoneIndex }
+            // Dwell (activation delay) state — a zone must persist under the
+            // pointer for ACTIVATION_DELAY_US before it visually activates, so
+            // highlights don't flicker in the instant the pointer grazes an edge.
+            this._candidateSig = null;
+            this._candidateSince = 0;
 
             /** @type {{ presetId: string, monitorIndex: number, rect, zoneIndex: number }|null} */
             this.hoveredZone = null;
@@ -60,29 +68,38 @@ export const DragDetector = GObject.registerClass(
         }
 
         enable() {
-            // GNOME 45-49: grab-op-begin(display, window, grabOp) — 3 params.
-            // Some versions may drop the 3rd param; fall back to
-            // display.get_grab_op() when available.
+            // Idempotent: enable() may be re-invoked on session-mode changes.
+            if (this._enabled) return;
+            this._enabled = true;
+
+            // GNOME 45-50: grab-op-begin(display, window, grabOp) — 3 params.
+            // Some versions drop the 3rd param; fall back to display.get_grab_op().
             this._signalIds.push(
                 global.display.connect("grab-op-begin", (_dpy, win, op) => {
-                    const grabOp = op ?? global.display.get_grab_op?.() ?? 0;
-                    // Accept mouse-move, keyboard-move, and unconstrained move
-                    if (grabOp === Meta.GrabOp.MOVING ||
-                        grabOp === Meta.GrabOp.KEYBOARD_MOVING ||
-                        grabOp === Meta.GrabOp.MOVING_UNCONSTRAINED)
-                        this._onDragBegin(win);
+                    try {
+                        const grabOp = op ?? global.display.get_grab_op?.() ?? 0;
+                        // Accept mouse-move, keyboard-move, and unconstrained move
+                        if (grabOp === Meta.GrabOp.MOVING ||
+                            grabOp === Meta.GrabOp.KEYBOARD_MOVING ||
+                            grabOp === Meta.GrabOp.MOVING_UNCONSTRAINED)
+                            this._onDragBegin(win);
+                    } catch (e) { this._log?.error(`DragDetector grab-begin: ${e}`); }
                 }),
                 global.display.connect("grab-op-end", (_dpy, win, _op) => {
-                    if (this._dragging && win === this._draggedWindow)
-                        this._onDragEnd();
+                    try {
+                        if (this._dragging && win === this._draggedWindow)
+                            this._onDragEnd();
+                    } catch (e) { this._log?.error(`DragDetector grab-end: ${e}`); }
                 })
             );
         }
 
         disable() {
+            if (!this._enabled) return;
+            this._enabled = false;
             this._stopPolling();
             for (const id of this._signalIds)
-                global.display.disconnect(id);
+                try { global.display.disconnect(id); } catch (_) {}
             this._signalIds = [];
             this._dragging = false;
             this._draggedWindow = null;
@@ -91,10 +108,13 @@ export const DragDetector = GObject.registerClass(
         // ------------------------------------------------------------------ private
 
         _onDragBegin(metaWindow) {
-            if (!this._settings.dragHighlightEnabled) return;
+            // Always poll so drag-to-snap works even with highlights disabled;
+            // that setting gates only the highlight drawing (see _poll).
             this._dragging = true;
             this._draggedWindow = metaWindow;
             this._lastHoveredZone = null;
+            this._candidateSig = null;
+            this._candidateSince = 0;
             this._lastPx = null;
             this._lastPy = null;
             this._startPolling();
@@ -139,7 +159,8 @@ export const DragDetector = GObject.registerClass(
                     if (this._dragging) this._onDragEnd();
                     return GLib.SOURCE_REMOVE;
                 }
-                this._poll();
+                try { this._poll(); }
+                catch (e) { this._log?.error(`DragDetector poll: ${e}`); }
                 return GLib.SOURCE_CONTINUE;
             });
         }
@@ -160,6 +181,7 @@ export const DragDetector = GObject.registerClass(
             this._lastPx = px;
             this._lastPy = py;
 
+            const showHighlight = this._settings.dragHighlightEnabled;
             const monitorIndex = this._zoneManager.getMonitorForPoint(px, py);
 
             // Windows 11-style: only reveal snap zones when the pointer is near
@@ -168,27 +190,47 @@ export const DragDetector = GObject.registerClass(
             const edgeZone = this._getEdgeZone(px, py, monitorIndex);
 
             if (!edgeZone) {
-                // Away from any edge — hide highlights.
+                // Away from any edge — clear pending candidate and hide.
+                this._candidateSig = null;
                 if (this._lastHoveredZone) {
                     this._lastHoveredZone = null;
                     this.hoveredZone = null;
-                    this.emit("zone-hovered", "", monitorIndex, -1);
+                    if (showHighlight)
+                        this.emit("zone-hovered", "", monitorIndex, -1);
                 }
                 return;
             }
 
             const { presetId, rect, zoneIndex, isMaximize } = edgeZone;
+            const sig = `${presetId}|${monitorIndex}|${zoneIndex}`;
 
-            const changed = !this._lastHoveredZone ||
-                this._lastHoveredZone.zoneIndex  !== zoneIndex  ||
-                this._lastHoveredZone.presetId   !== presetId   ||
-                this._lastHoveredZone.monitorIndex !== monitorIndex;
-
-            if (changed) {
-                this._lastHoveredZone = { presetId, monitorIndex, rect, zoneIndex, isMaximize };
-                this.hoveredZone = { presetId, monitorIndex, rect, zoneIndex };
-                this.emit("zone-hovered", presetId, monitorIndex, zoneIndex);
+            // Already the committed (visible) zone — nothing to do.
+            if (this._lastHoveredZone &&
+                this._lastHoveredZone.presetId === presetId &&
+                this._lastHoveredZone.monitorIndex === monitorIndex &&
+                this._lastHoveredZone.zoneIndex === zoneIndex) {
+                this._candidateSig = null;
+                return;
             }
+
+            // Dwell: a new zone must persist under the pointer for a short delay
+            // before it activates. This stops the highlight from flashing the
+            // instant the pointer grazes an edge on the way somewhere else.
+            const now = GLib.get_monotonic_time();
+            if (this._candidateSig !== sig) {
+                this._candidateSig = sig;
+                this._candidateSince = now;
+                return;
+            }
+            if (now - this._candidateSince < ACTIVATION_DELAY_US) return;
+
+            // Commit the zone. We ALWAYS record it (so drag-to-snap works even
+            // with highlights disabled) but only emit the visual when enabled.
+            this._candidateSig = null;
+            this._lastHoveredZone = { presetId, monitorIndex, rect, zoneIndex, isMaximize };
+            this.hoveredZone = { presetId, monitorIndex, rect, zoneIndex };
+            if (showHighlight)
+                this.emit("zone-hovered", presetId, monitorIndex, zoneIndex);
         }
 
         /**
@@ -208,17 +250,6 @@ export const DragDetector = GObject.registerClass(
             const mon = global.display.get_monitor_geometry(monitorIndex);
             if (!mon) return null;
 
-            // Workarea for zone rects
-            let wa;
-            try {
-                wa = this._draggedWindow
-                    ? this._draggedWindow.get_work_area_for_monitor(monitorIndex)
-                    : mon;
-            } catch (_) {
-                wa = mon;
-            }
-            if (!wa) return null;
-
             const T = Math.max(this._settings.dragEdgeThreshold ?? 20, 20);
             const C = T * 2; // corner detection box
 
@@ -228,29 +259,27 @@ export const DragDetector = GObject.registerClass(
             const nearTop    = py < mon.y + C;
             const nearBottom = py > mon.y + mon.height - C;
 
-            const { x, y, width: w, height: h } = wa;
-            const g = this._settings.windowGapSize ?? 0;
-            const halfG = g / 2;
-            const mk = (rx, ry, rw, rh) => makeRect({
-                x:      Math.round(rx + halfG),
-                y:      Math.round(ry + halfG),
-                width:  Math.round(rw - g),
-                height: Math.round(rh - g),
-            });
+            // Resolve the resulting rect from ZoneManager so gaps (inner/outer)
+            // and the workarea are applied consistently — no duplicated math.
+            const zr = (presetId, zoneIndex, isMaximize = false) => {
+                const rects = this._zoneManager.getZoneRects(presetId, monitorIndex);
+                const rect = rects[zoneIndex];
+                return rect ? { presetId, zoneIndex, rect, isMaximize } : null;
+            };
 
             // Corners (evaluated first — highest priority)
-            if (nearLeft  && nearTop)    return { presetId: "quarters", zoneIndex: 0, rect: mk(x,       y,       w / 2, h / 2), isMaximize: false };
-            if (nearRight && nearTop)    return { presetId: "quarters", zoneIndex: 1, rect: mk(x + w/2, y,       w / 2, h / 2), isMaximize: false };
-            if (nearLeft  && nearBottom) return { presetId: "quarters", zoneIndex: 2, rect: mk(x,       y + h/2, w / 2, h / 2), isMaximize: false };
-            if (nearRight && nearBottom) return { presetId: "quarters", zoneIndex: 3, rect: mk(x + w/2, y + h/2, w / 2, h / 2), isMaximize: false };
+            if (nearLeft  && nearTop)    return zr("quarters", 0);
+            if (nearRight && nearTop)    return zr("quarters", 1);
+            if (nearLeft  && nearBottom) return zr("quarters", 2);
+            if (nearRight && nearBottom) return zr("quarters", 3);
 
-            // Top edge → maximize (use same threshold as corners since monitor
-            // edge is further from workarea edge when panel is present)
-            if (py < mon.y + T) return { presetId: "__maximize__", zoneIndex: -1, rect: mk(x, y, w, h), isMaximize: true };
+            // Top edge → maximize. A full-workarea preview shows during hover;
+            // the window is actually maximized on release (see _onDragEnd).
+            if (py < mon.y + T) return zr("__maximize__", 0, true);
 
-            // Side edges → left/right halves (detect from monitor edge)
-            if (px < mon.x + T)              return { presetId: "halves", zoneIndex: 0, rect: mk(x,       y, w / 2, h), isMaximize: false };
-            if (px > mon.x + mon.width - T)  return { presetId: "halves", zoneIndex: 1, rect: mk(x + w/2, y, w / 2, h), isMaximize: false };
+            // Side edges → left/right halves
+            if (px < mon.x + T)              return zr("halves", 0);
+            if (px > mon.x + mon.width - T)  return zr("halves", 1);
 
             return null;
         }

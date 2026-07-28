@@ -66,12 +66,26 @@ describe("ZoneManager.getZoneRects", () => {
         assert.equal(rects[1].width, 960);
     });
 
-    it("applies gap correctly", () => {
+    it("applies edge-aware gaps correctly", () => {
+        // Inner gap 8 (outer follows inner). Left zone: screen-edge (outer=8) on
+        // the left, shared edge (half inner=4) on the right → x=8, width=960-8-4=948.
         const zmGap = new ZoneManager(makeSettings({ windowGapSize: 8 }), makeCustomZones(), null);
         const rects = zmGap.getZoneRects("halves", 0);
-        // Left zone: x = 0 + 4 = 4, width = 960 - 8 = 952
-        assert.equal(rects[0].x, 4);
-        assert.equal(rects[0].width, 952);
+        assert.equal(rects[0].x, 8);
+        assert.equal(rects[0].width, 948);
+        // The gap between the two halves is exactly the inner gap (8px).
+        const rightStart = rects[1].x;
+        const leftEnd = rects[0].x + rects[0].width;
+        assert.equal(rightStart - leftEnd, 8);
+    });
+
+    it("outer gap is independently configurable", () => {
+        const zmGap = new ZoneManager(
+            makeSettings({ windowGapSize: 4, outerGapSize: 20 }), makeCustomZones(), null);
+        const rects = zmGap.getZoneRects("halves", 0);
+        // Left zone screen edge uses the outer gap (20), shared edge half inner (2).
+        assert.equal(rects[0].x, 20);
+        assert.equal(rects[0].width, 960 - 20 - 2);
     });
 
     it("returns 4 rects for quarters preset", () => {

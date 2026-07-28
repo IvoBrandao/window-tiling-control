@@ -35,6 +35,9 @@ function makeWindow({ maximized = false, resizable = true, movable = true } = {}
         allows_resize: () => resizable,
         allows_move: () => movable,
         unmaximize: () => { unmaximizeCalled = false; _maximized = 0; },
+        // The idle callback now bails if the window has been finalized; a live
+        // window returns a truthy compositor actor.
+        get_compositor_private: () => ({}),
         is_hidden: () => false,
         _wasUnmaximized: () => unmaximizeCalled,
     };

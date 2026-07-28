@@ -10,8 +10,8 @@
  * The unmaximize+overlay sequence is invisible to users at normal animation
  * speeds (same technique used by PopShell and KDE Bismuth).
  *
- * To prevent intercepting our own programmatic maximizes (snapFocusedUp),
- * call bypass(windowId) right before calling win.maximize().
+ * To prevent intercepting our own programmatic maximizes, call bypass(windowId)
+ * right before calling win.maximize().
  */
 
 import Meta from "gi://Meta";
@@ -38,6 +38,7 @@ export class MaximizeHook {
          *  Prevents intercepting a drag-to-top-edge maximize. */
         this._grabActive = false;
 
+        this._enabled = false;
         this._wmSignals = [];
         this._displaySignals = [];
         this._startupTimerId = null;
@@ -58,6 +59,10 @@ export class MaximizeHook {
     }
 
     enable() {
+        // Idempotent: enable() may be re-invoked on session-mode changes.
+        if (this._enabled) return;
+        this._enabled = true;
+
         // Startup grace: don't intercept any maximizes for the first 4 seconds
         // after enable.  This avoids the login-time blocking where session-
         // restored windows get their maximize intercepted, causing repeated
@@ -71,7 +76,8 @@ export class MaximizeHook {
 
         this._wmSignals.push(
             global.window_manager.connect("size-changed", (_wm, actor) => {
-                this._onSizeChanged(actor);
+                try { this._onSizeChanged(actor); }
+                catch (e) { this._log?.error(`MaximizeHook size-changed: ${e}`); }
             })
         );
 
@@ -108,6 +114,8 @@ export class MaximizeHook {
     }
 
     disable() {
+        if (!this._enabled) return;
+        this._enabled = false;
         if (this._startupTimerId) {
             GLib.Source.remove(this._startupTimerId);
             this._startupTimerId = null;
@@ -186,9 +194,15 @@ export class MaximizeHook {
         let sid;
         sid = this._addSource(GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._pendingSources.delete(sid);
-            this._bypassed.delete(win.get_id());
-            if (!win.is_hidden())
-                this._snapOverlay.open(win);
+            // Bail if the window was closed between the size-changed and now.
+            try {
+                if (!win.get_compositor_private?.()) return GLib.SOURCE_REMOVE;
+                this._bypassed.delete(win.get_id());
+                if (!win.is_hidden())
+                    this._snapOverlay.open(win);
+            } catch (e) {
+                this._log?.error(`MaximizeHook idle: ${e}`);
+            }
             return GLib.SOURCE_REMOVE;
         }));
     }

@@ -81,6 +81,35 @@ const KB_DEFS = [
         handler: c => () => c.focusCycleTiled(),
     },
     {
+        name: "show-shortcuts",
+        handler: c => () => c.showShortcutsCheatsheet(),
+    },
+    {
+        name: "toggle-resize-mode",
+        handler: c => () => c.toggleResizeMode(),
+    },
+    {
+        name: "focus-left",
+        handler: c => () => c.focusDirection("left"),
+    },
+    {
+        name: "focus-right",
+        handler: c => () => c.focusDirection("right"),
+    },
+    {
+        name: "focus-up",
+        handler: c => () => c.focusDirection("up"),
+    },
+    {
+        name: "focus-down",
+        handler: c => () => c.focusDirection("down"),
+    },
+    // Direct zone snap (unbound by default; snaps into the active preset's zone).
+    ...[1, 2, 3, 4, 5, 6].map(n => ({
+        name: `snap-to-zone-${n}`,
+        handler: c => () => c.snapFocusedToActiveZone(n - 1),
+    })),
+    {
         name: "auto-tile-grid",
         handler: c => () => c.autoTileToGrid(),
     },
@@ -109,6 +138,9 @@ export class Keybindings {
     }
 
     enable() {
+        // Idempotent: enable() may be re-invoked on session-mode changes.
+        if (this._registered.length > 0) return;
+
         const kbSettings = this._settings.kbSettings;
 
         for (const def of KB_DEFS) {

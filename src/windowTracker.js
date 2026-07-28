@@ -10,6 +10,7 @@
 
 import GLib from "gi://GLib";
 import Meta from "gi://Meta";
+import Shell from "gi://Shell";
 import { makeRect } from "./compat.js";
 
 export class WindowTracker {
@@ -31,11 +32,41 @@ export class WindowTracker {
         this._pendingSources = new Set();
 
         this._snapAssist = null; // set by controller after construction
+        this._changeListener = null; // set by controller (snap-groups refresh)
+        this._changeDebounceId = null;
+
+        /** appId → { presetId, zoneIndex, monitorIndex } for relaunch restore. */
+        this._persistMemory = new Map();
+    }
+
+    /**
+     * Register a callback fired (debounced) whenever the snapped-window set
+     * changes, so dependent UI (the snap-groups panel button) can refresh.
+     */
+    setChangeListener(fn) {
+        this._changeListener = fn;
+    }
+
+    _notifyChange() {
+        if (!this._changeListener) return;
+        // Coalesce bursts (e.g. auto-tile snapping many windows) into one refresh.
+        if (this._changeDebounceId) return;
+        let sid;
+        sid = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
+            this._changeDebounceId = null;
+            this._pendingSources.delete(sid);
+            try { this._changeListener?.(); } catch (_) {}
+            return GLib.SOURCE_REMOVE;
+        });
+        this._changeDebounceId = sid;
+        this._pendingSources.add(sid);
     }
 
     // ------------------------------------------------------------------ lifecycle
 
     enable() {
+        this._loadPersist();
+
         this._signalIds.push(
             global.display.connect("window-created", (_dpy, metaWindow) => {
                 this._onWindowCreated(metaWindow);
@@ -87,7 +118,10 @@ export class WindowTracker {
     snapWindow(metaWindow, presetId, zoneIndex, zoneRect) {
         const windowId = metaWindow.get_id();
         const monitorIndex = metaWindow.get_monitor();
-        const workspaceIndex = metaWindow.get_workspace().index();
+        // get_workspace() can be null for not-yet-placed / closing windows.
+        const ws = metaWindow.get_workspace();
+        if (!ws) return;
+        const workspaceIndex = ws.index();
 
         const entry = { presetId, zoneIndex, zoneRect, monitorIndex, workspaceIndex };
         this._snapped.set(windowId, entry);
@@ -97,6 +131,8 @@ export class WindowTracker {
         );
 
         this._zoneManager.assignWindowToZone(metaWindow, zoneRect);
+        this._notifyChange();
+        this._recordPersist(metaWindow, entry);
 
         // Trigger Snap Assist for remaining unfilled zones
         if (this._snapAssist && this._settings.snapAssistEnabled) {
@@ -130,6 +166,7 @@ export class WindowTracker {
         if (this._snapped.has(windowId)) {
             this._log?.debug(`WindowTracker: unsnap win=${windowId}`);
             this._snapped.delete(windowId);
+            this._notifyChange();
         }
     }
 
@@ -230,7 +267,8 @@ export class WindowTracker {
 
         return this._getAllWindows().filter(win => {
             if (win.get_monitor() !== monitorIndex) return false;
-            if (win.get_workspace().index() !== workspaceIndex) return false;
+            const ws = win.get_workspace();
+            if (!ws || ws.index() !== workspaceIndex) return false;
             if (win.minimized) return false;
             if (win.skip_taskbar) return false;
             if (snappedIds.has(win.get_id())) return false;
@@ -246,7 +284,8 @@ export class WindowTracker {
     getTileableWindows(monitorIndex, workspaceIndex) {
         return this._getAllWindows().filter(win => {
             if (win.get_monitor() !== monitorIndex) return false;
-            if (win.get_workspace().index() !== workspaceIndex) return false;
+            const ws = win.get_workspace();
+            if (!ws || ws.index() !== workspaceIndex) return false;
             if (win.minimized) return false;
             if (win.skip_taskbar) return false;
             return true;
@@ -261,7 +300,10 @@ export class WindowTracker {
         sid = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             this._pendingSources.delete(sid);
             // The window may have been unmanaged while we waited.
-            try { this._watchWindow(metaWindow); } catch (_) {}
+            try {
+                this._watchWindow(metaWindow);
+                this._maybeRestore(metaWindow);
+            } catch (_) {}
             return GLib.SOURCE_REMOVE;
         });
         this._pendingSources.add(sid);
@@ -273,22 +315,31 @@ export class WindowTracker {
 
         const signals = [];
 
-        // Unsnap if the user manually moves or resizes the window
+        // Unsnap if the user manually moves or resizes the window. Bodies are
+        // wrapped since these raw GObject callbacks run outside the extension
+        // error boundary.
         signals.push(
             metaWindow.connect("position-changed", () => {
-                if (this._snapped.has(windowId))
-                    this._onWindowMoved(metaWindow);
+                try {
+                    if (this._snapped.has(windowId))
+                        this._onWindowMoved(metaWindow);
+                } catch (e) { this._log?.error(`WindowTracker position-changed: ${e}`); }
             }),
             metaWindow.connect("size-changed", () => {
-                if (this._snapped.has(windowId))
-                    this._onWindowResized(metaWindow);
+                try {
+                    if (this._snapped.has(windowId))
+                        this._onWindowResized(metaWindow);
+                } catch (e) { this._log?.error(`WindowTracker size-changed: ${e}`); }
             }),
             metaWindow.connect("workspace-changed", () => {
-                this.unsnapWindow(metaWindow);
+                try { this.unsnapWindow(metaWindow); }
+                catch (e) { this._log?.error(`WindowTracker workspace-changed: ${e}`); }
             }),
             metaWindow.connect("unmanaged", () => {
-                this.unsnapWindow(metaWindow);
-                this._cleanupWindow(windowId);
+                try {
+                    this.unsnapWindow(metaWindow);
+                    this._cleanupWindow(windowId);
+                } catch (e) { this._log?.error(`WindowTracker unmanaged: ${e}`); }
             })
         );
 
@@ -296,8 +347,10 @@ export class WindowTracker {
         try {
             signals.push(
                 metaWindow.connect("notify::minimized", () => {
-                    if (metaWindow.minimized)
-                        this.unsnapWindow(metaWindow);
+                    try {
+                        if (metaWindow.minimized)
+                            this.unsnapWindow(metaWindow);
+                    } catch (e) { this._log?.error(`WindowTracker minimized: ${e}`); }
                 })
             );
         } catch (_) {}
@@ -317,8 +370,11 @@ export class WindowTracker {
         const drifted = Math.abs(current.x - r.x) > tolerance ||
                         Math.abs(current.y - r.y) > tolerance;
 
-        if (drifted)
+        if (drifted) {
+            // Dragging away releases the app from its zone; forget its placement.
+            this._forgetPersist(metaWindow);
             this.unsnapWindow(metaWindow);
+        }
     }
 
     _onWindowResized(metaWindow) {
@@ -431,6 +487,83 @@ export class WindowTracker {
             win.move_to_monitor(newMonitorIndex);
             this.snapWindow(win, entry.presetId, entry.zoneIndex, newRect);
         }
+    }
+
+    // ------------------------------------------------------------------ persist (opt-in)
+
+    _appIdFor(metaWindow) {
+        try {
+            const app = Shell.WindowTracker.get_default().get_window_app(metaWindow);
+            return app?.get_id?.() ?? null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    _loadPersist() {
+        this._persistMemory.clear();
+        if (!this._settings.persistSnapGroups) return;
+        for (const line of this._settings.snapGroupMemory ?? []) {
+            const [appId, presetId, zoneIndex, monitorIndex] = line.split("|");
+            if (appId && presetId)
+                this._persistMemory.set(appId, {
+                    presetId,
+                    zoneIndex: Number(zoneIndex) || 0,
+                    monitorIndex: Number(monitorIndex) || 0,
+                });
+        }
+    }
+
+    _savePersist() {
+        const lines = [];
+        for (const [appId, p] of this._persistMemory)
+            lines.push(`${appId}|${p.presetId}|${p.zoneIndex}|${p.monitorIndex}`);
+        this._settings.snapGroupMemory = lines;
+    }
+
+    _recordPersist(metaWindow, entry) {
+        if (!this._settings.persistSnapGroups) return;
+        // Only remember real app windows (skip dialogs/utility windows).
+        if (metaWindow.get_window_type?.() !== Meta.WindowType.NORMAL) return;
+        const appId = this._appIdFor(metaWindow);
+        if (!appId) return;
+        this._persistMemory.set(appId, {
+            presetId: entry.presetId,
+            zoneIndex: entry.zoneIndex,
+            monitorIndex: entry.monitorIndex,
+        });
+        this._savePersist();
+    }
+
+    _forgetPersist(metaWindow) {
+        if (!this._persistMemory.size) return;
+        const appId = this._appIdFor(metaWindow);
+        if (appId && this._persistMemory.delete(appId))
+            this._savePersist();
+    }
+
+    _maybeRestore(metaWindow) {
+        if (!this._settings.persistSnapGroups || !this._persistMemory.size) return;
+        if (metaWindow.get_window_type?.() !== Meta.WindowType.NORMAL) return;
+        if (metaWindow.skip_taskbar) return;
+
+        const appId = this._appIdFor(metaWindow);
+        if (!appId) return;
+        const p = this._persistMemory.get(appId);
+        if (!p) return;
+
+        // Don't fight the user: only restore if that zone is currently empty.
+        const occupant = this.getWindowAtZone(p.presetId, p.zoneIndex, p.monitorIndex);
+        if (occupant) return;
+
+        const rects = this._zoneManager.getZoneRects(
+            p.presetId, p.monitorIndex, this._settings.windowGapSize
+        );
+        const rect = rects[p.zoneIndex];
+        if (!rect) return;
+
+        this._log?.debug(`WindowTracker: restoring ${appId} → ${p.presetId}[${p.zoneIndex}]`);
+        this.snapWindow(metaWindow, p.presetId, p.zoneIndex, rect);
     }
 
     _cleanupWindow(windowId) {

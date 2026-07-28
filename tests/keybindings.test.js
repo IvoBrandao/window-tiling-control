@@ -67,12 +67,12 @@ describe("Keybindings", () => {
         });
     });
 
-    it("registers all 21 keybindings on enable", () => {
+    it("registers all 33 keybindings on enable", () => {
         const kb = new Keybindings(makeSettings(), makeController(), makeLogger());
         kb.enable();
 
-        assert.equal(addedBindings.length, 21);
-        assert.equal(kb._registered.length, 21);
+        assert.equal(addedBindings.length, 33);
+        assert.equal(kb._registered.length, 33);
     });
 
     it("registers expected binding names", () => {
@@ -207,7 +207,7 @@ describe("Keybindings", () => {
         kb.enable();
         kb.disable();
 
-        assert.equal(removedBindings.length, 21);
+        assert.equal(removedBindings.length, 33);
         assert.equal(kb._registered.length, 0);
     });
 
@@ -216,7 +216,7 @@ describe("Keybindings", () => {
         kb.enable();
         kb.disable();
         assert.doesNotThrow(() => kb.disable());
-        assert.equal(removedBindings.length, 21); // only first disable removes
+        assert.equal(removedBindings.length, 33); // only first disable removes
     });
 
     it("survives addKeybinding failure for individual bindings", () => {
@@ -237,7 +237,7 @@ describe("Keybindings", () => {
         kb.enable();
 
         assert.equal(failCount, 1);
-        assert.equal(kb._registered.length, 20); // one failed
+        assert.equal(kb._registered.length, 32); // one failed
         assert.ok(logger._logs.some(l => l[0] === "warn" && l[1].includes("snap-top-left")));
     });
 

@@ -198,11 +198,9 @@ export class SnapGroupsManager {
             return true;
         });
 
-        // Hover: highlight group windows
-        row.connect("enter-event", () => {
-            for (const { metaWindow } of group.members)
-                metaWindow.activate(global.display.get_current_time());
-        });
+        // Hover: highlight the row only (restoring the group is the click action).
+        row.connect("enter-event", () => row.add_style_pseudo_class("hover"));
+        row.connect("leave-event", () => row.remove_style_pseudo_class("hover"));
 
         return row;
     }

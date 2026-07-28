@@ -1,4 +1,8 @@
-# Window Tiling Control for GNOME
+<p align="center">
+  <img src="assets/logo.svg" alt="Window Tiling Control" width="140" height="140">
+</p>
+
+<h1 align="center">Window Tiling Control for GNOME</h1>
 
 A GNOME Shell extension (45–50) that brings window snap zones to the Linux desktop.
 Drag windows to screen edges, use i3-inspired keyboard shortcuts, or draw your own custom zone layouts.
@@ -7,12 +11,17 @@ Drag windows to screen edges, use i3-inspired keyboard shortcuts, or draw your o
 
 - **Drag-to-edge snapping** — drag a window to a screen corner for quarter tiling, to a side for half tiling, or to the top to maximize
 - **Snap layout picker** (`Super+Z`) — visual overlay to choose from 8 built-in presets (halves, thirds, quarters, sixths, wide-left/right, and more)
-- **i3-style keybindings** — `Super+arrows` for tiling, `Super+U/I/J/K` for direct quarter placement, `Super+Shift` for move/swap
+- **i3-style keybindings** — `Super+arrows` for tiling, `Super+U/I/J/K` for direct quarter placement, `Super+Shift` for move/swap. Movement is **layout-aware** — it navigates the active layout's real zones, not just a quarters grid
+- **i3-style directional focus** — `Super+Alt+arrows` focuses the nearest window in that direction
+- **Keyboard resize mode** (`Super+R`) — arrow keys resize the focused window (and its snapped neighbours); `Shift` for fine steps, `Esc` to exit
+- **Shortcut cheat sheet** (`Super+/`) — hold to show every shortcut, release to dismiss
 - **Custom zone editor** (`Super+E`) — full-screen draw-to-create zone editor with snap-to-grid, handle resizing, and save/load
 - **Snap assist** — after snapping a window, shows thumbnails of remaining windows to fill empty zones
-- **Snap groups** — remembers groups of tiled windows and offers one-click restore from the panel
+- **Snap groups** — remembers groups of tiled windows and offers one-click restore from the panel; optionally **re-snap apps across relaunch**
 - **Multi-monitor support** — per-monitor presets, cross-monitor window movement (`Super+Ctrl+arrows`)
-- **Auto-tile** (`Super+T`) — tiles all visible windows into the active layout grid
+- **Configurable gaps** — independent inner (between windows) and outer (screen-edge) gaps
+- **Configurable animations** — master on/off toggle plus speed control
+- **Auto-tile** (`Super+Shift+T`) — tiles all visible windows into the active layout grid
 - **Focus cycling** (`Super+Tab`) — cycles keyboard focus between tiled windows
 
 ## Installation

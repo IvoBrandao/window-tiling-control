@@ -23,8 +23,11 @@ export class Animations {
         this._settings = settings;
     }
 
-    /** Duration in ms respecting the global speed setting. */
+    /** Duration in ms respecting the master toggle and the global speed setting. */
     get duration() {
+        // Master switch: when animations are disabled everything is instant,
+        // regardless of the speed setting.
+        if (this._settings?.animationsEnabled === false) return 0;
         const speed = this._settings?.animationSpeed ?? 2;
         return SPEED_MAP[speed] ?? 200;
     }

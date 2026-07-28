@@ -62,7 +62,11 @@ export class ZoneEditor {
         this._monitorIndex = monitorIndex;
         this._editingSetId = existingSetId;
 
-        const geom = global.display.get_monitor_geometry(monitorIndex);
+        // Edit in workarea space (panel/dock excluded) — the same space
+        // ZoneManager applies zones in, so drawn zones map 1:1 when used.
+        const geom = this._area =
+            this._zoneManager._getWorkarea(monitorIndex) ??
+            global.display.get_monitor_geometry(monitorIndex);
 
         // Dark backdrop covering the entire monitor
         this._backdrop = new St.Widget({
@@ -259,7 +263,7 @@ export class ZoneEditor {
     // ------------------------------------------------------------------ private — zone actors
 
     _addZoneActor(normRect) {
-        const geom = global.display.get_monitor_geometry(this._monitorIndex);
+        const geom = this._area ?? global.display.get_monitor_geometry(this._monitorIndex);
         const actor = new St.Bin({ style_class: "wtc-editor-zone", reactive: true });
 
         this._updateActorFromNorm(actor, normRect, geom);
@@ -353,7 +357,7 @@ export class ZoneEditor {
         const ly = cy - oy;
 
         // Ignore clicks on the toolbar area
-        const geom = global.display.get_monitor_geometry(this._monitorIndex);
+        const geom = this._area ?? global.display.get_monitor_geometry(this._monitorIndex);
         const toolbarH = 56;
 
         if (ly > geom.height - toolbarH)
@@ -415,7 +419,7 @@ export class ZoneEditor {
         const lx = cx - ox;
         const ly = cy - oy;
 
-        const geom = global.display.get_monitor_geometry(this._monitorIndex);
+        const geom = this._area ?? global.display.get_monitor_geometry(this._monitorIndex);
 
         if (this._drawing && this._rubberband) {
             const x = Math.min(lx, this._drawStart.x);
@@ -444,7 +448,7 @@ export class ZoneEditor {
         const lx = cx - ox;
         const ly = cy - oy;
 
-        const geom = global.display.get_monitor_geometry(this._monitorIndex);
+        const geom = this._area ?? global.display.get_monitor_geometry(this._monitorIndex);
 
         if (this._drawing) {
             this._drawing = false;

@@ -33,6 +33,18 @@
       <description>Show zone highlight overlays when dragging a window near a snap zone.</description>
     </key>
 
+    <key name="persist-snap-groups" type="b">
+      <default>false</default>
+      <summary>Remember Snapped Apps Across Relaunch</summary>
+      <description>When on, an app re-snaps to its last zone the next time it opens (if that zone is free).</description>
+    </key>
+
+    <key name="snap-group-memory" type="as">
+      <default>[]</default>
+      <summary>Persisted App→Zone Placements</summary>
+      <description>Internal. One entry per app: "appId|presetId|zoneIndex|monitorIndex".</description>
+    </key>
+
     <key name="snap-groups-enabled" type="b">
       <default>true</default>
       <summary>Enable Snap Groups</summary>
@@ -43,8 +55,15 @@
     <key name="window-gap-size" type="u">
       <default>4</default>
       <range min="0" max="40"/>
-      <summary>Window Gap Size</summary>
-      <description>Gap in pixels between snapped windows and monitor edges.</description>
+      <summary>Inner Gap Size</summary>
+      <description>Gap in pixels between adjacent snapped windows.</description>
+    </key>
+
+    <key name="outer-gap-size" type="u">
+      <default>0</default>
+      <range min="0" max="80"/>
+      <summary>Outer Gap Size</summary>
+      <description>Gap in pixels between snapped windows and the screen/workarea edges. 0 = follow the inner gap.</description>
     </key>
 
     <!-- Drag behaviour -->
@@ -64,6 +83,12 @@
     </key>
 
     <!-- Animations -->
+    <key name="animations-enabled" type="b">
+      <default>true</default>
+      <summary>Enable Animations</summary>
+      <description>Master switch for all overlay/window animations. When off, everything is instant regardless of Animation Speed.</description>
+    </key>
+
     <key name="animation-speed" type="u">
       <default>2</default>
       <range min="0" max="3"/>
@@ -238,9 +263,47 @@
     </key>
 
     <key name="auto-tile-grid" type="as">
-      <default><![CDATA[['<Super>t']]]></default>
+      <default><![CDATA[['<Super><Shift>t']]]></default>
       <summary>Auto-Tile to Active Grid</summary>
       <description>Automatically tile all visible windows into the active zone layout.</description>
+    </key>
+
+    <key name="show-shortcuts" type="as">
+      <default><![CDATA[['<Super>slash']]]></default>
+      <summary>Show Keyboard Shortcuts</summary>
+      <description>Hold to show a cheat sheet of all shortcuts; release to dismiss.</description>
+    </key>
+
+    <key name="toggle-resize-mode" type="as">
+      <default><![CDATA[['<Super>r']]]></default>
+      <summary>Keyboard Resize Mode</summary>
+      <description>Enter a submode where arrow keys resize the focused window; Escape/Enter to exit.</description>
+    </key>
+
+    <!-- ── i3-style Directional Focus (Super+Alt + direction) ────────── -->
+
+    <key name="focus-left" type="as">
+      <default><![CDATA[['<Super><Alt>Left']]]></default>
+      <summary>Focus Window to the Left</summary>
+      <description>Move keyboard focus to the nearest window left of the focused one.</description>
+    </key>
+
+    <key name="focus-right" type="as">
+      <default><![CDATA[['<Super><Alt>Right']]]></default>
+      <summary>Focus Window to the Right</summary>
+      <description>Move keyboard focus to the nearest window right of the focused one.</description>
+    </key>
+
+    <key name="focus-up" type="as">
+      <default><![CDATA[['<Super><Alt>Up']]]></default>
+      <summary>Focus Window Above</summary>
+      <description>Move keyboard focus to the nearest window above the focused one.</description>
+    </key>
+
+    <key name="focus-down" type="as">
+      <default><![CDATA[['<Super><Alt>Down']]]></default>
+      <summary>Focus Window Below</summary>
+      <description>Move keyboard focus to the nearest window below the focused one.</description>
     </key>
 
     <!-- ── Monitor Movement (Super+Ctrl + direction) ────────────────── -->

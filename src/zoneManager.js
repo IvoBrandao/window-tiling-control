@@ -58,9 +58,19 @@ export class ZoneManager {
         const workarea = this._getWorkarea(monitorIndex);
         if (!workarea) return [];
 
+        // Synthetic "maximize" preset: a single full-workarea rect. Used to
+        // render a preview when the pointer drags into the top edge.
+        if (presetId === "__maximize__") {
+            return [makeRect({
+                x: workarea.x, y: workarea.y,
+                width: workarea.width, height: workarea.height,
+            })];
+        }
+
         // Cache key includes the workarea geometry so it self-invalidates when
         // the monitor/panel layout changes without an explicit signal.
-        const key = `${presetId}|${monitorIndex}|${gap}|` +
+        const outer = this._settings.outerGapSize ?? gap;
+        const key = `${presetId}|${monitorIndex}|${gap}|${outer}|` +
             `${workarea.x},${workarea.y},${workarea.width},${workarea.height}`;
         const cached = this._rectCache.get(key);
         if (cached) return cached;
@@ -71,7 +81,7 @@ export class ZoneManager {
             return [];
         }
 
-        const rects = preset.zones.map(norm => this._normToPixel(norm, workarea, gap));
+        const rects = preset.zones.map(norm => this._normToPixel(norm, workarea, gap, outer));
         this._rectCache.set(key, rects);
         return rects;
     }
@@ -248,17 +258,26 @@ export class ZoneManager {
     // ------------------------------------------------------------------ private helpers
 
     /**
-     * Convert a normalized rect to pixel Meta.Rectangle within a workarea,
-     * applying inward gap on all sides.
+     * Convert a normalized rect to a pixel Meta.Rectangle within a workarea.
+     *
+     * Edge-aware gaps: an edge on the workarea boundary gets the OUTER gap; an
+     * internal edge (shared with a neighbouring zone) gets half the INNER gap,
+     * so two adjacent zones leave exactly `inner` px between them.
      */
-    _normToPixel(norm, workarea, gap) {
+    _normToPixel(norm, workarea, inner, outer = inner) {
         const wa = workarea;
-        const halfGap = gap / 2;
+        const half = inner / 2;
+        const eps = 0.001;
 
-        const x = Math.round(wa.x + norm.x * wa.width  + halfGap);
-        const y = Math.round(wa.y + norm.y * wa.height + halfGap);
-        const w = Math.round(norm.w * wa.width  - gap);
-        const h = Math.round(norm.h * wa.height - gap);
+        const gL = norm.x <= eps                ? outer : half;
+        const gT = norm.y <= eps                ? outer : half;
+        const gR = norm.x + norm.w >= 1 - eps   ? outer : half;
+        const gB = norm.y + norm.h >= 1 - eps   ? outer : half;
+
+        const x = Math.round(wa.x + norm.x * wa.width  + gL);
+        const y = Math.round(wa.y + norm.y * wa.height + gT);
+        const w = Math.round(norm.w * wa.width  - gL - gR);
+        const h = Math.round(norm.h * wa.height - gT - gB);
 
         // Clamp to workarea to avoid tiny rounding overflows
         return makeRect({
@@ -302,9 +321,14 @@ export class ZoneManager {
 
     _getWorkareaForRect(rect) {
         const n = global.display.get_n_monitors();
+        // Match by the rect's centre against full (x+y) monitor containment so
+        // vertically-stacked monitors resolve correctly.
+        const cx = rect.x + rect.width / 2;
+        const cy = rect.y + rect.height / 2;
         for (let i = 0; i < n; i++) {
             const g = global.display.get_monitor_geometry(i);
-            if (rect.x >= g.x && rect.x < g.x + g.width)
+            if (cx >= g.x && cx < g.x + g.width &&
+                cy >= g.y && cy < g.y + g.height)
                 return this._getWorkarea(i);
         }
         return null;
