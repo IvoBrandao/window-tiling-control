@@ -53,7 +53,11 @@ gnome-extensions enable window-tiling-control@gnome-tiling
 
 ## Default Keybindings
 
-All shortcuts are customizable in the extension preferences.
+All shortcuts are customizable in the extension preferences. Six additional
+"Snap to Zone 1–6" shortcuts exist for jumping straight to a specific zone of
+the active layout; they ship unbound and can be assigned from the
+**Keybindings → Advanced: Direct Zone Snap** section of the preferences
+window.
 
 ### Window Tiling
 
@@ -82,12 +86,23 @@ All shortcuts are customizable in the extension preferences.
 | `Super+Shift+Up` | Move/swap window up |
 | `Super+Shift+Down` | Move/swap window down |
 
-### Focus & Layout
+### Directional Focus (i3-style)
+
+| Shortcut | Action |
+|---|---|
+| `Super+Alt+Left` | Focus nearest window to the left |
+| `Super+Alt+Right` | Focus nearest window to the right |
+| `Super+Alt+Up` | Focus nearest window above |
+| `Super+Alt+Down` | Focus nearest window below |
+
+### Focus, Layout & Modes
 
 | Shortcut | Action |
 |---|---|
 | `Super+Tab` | Cycle focus between tiled windows |
-| `Super+T` | Auto-tile all visible windows |
+| `Super+Shift+T` | Auto-tile all visible windows |
+| `Super+R` | Toggle keyboard resize mode |
+| `Super+/` | Hold to show the shortcut cheat sheet |
 | `Super+Z` | Open snap layout picker |
 | `Super+E` | Open zone editor |
 | `Super+]` | Cycle to next preset |
@@ -108,8 +123,8 @@ Open the extension preferences from GNOME Extensions or the Quick Settings menu.
 1. **General** — master enable switch, window gap size, drag edge threshold, log level
 2. **Features** — toggle snap overlay, snap assist, drag zone highlights, snap groups
 3. **Appearance** — animation speed, snap assist timeout, zone highlight colors
-4. **Keybindings** — customize all shortcuts with grouped categories and a reset button
-5. **Layouts** — manage saved custom zone layouts
+4. **Keybindings** — customize all shortcuts with grouped categories, conflict warnings, and a reset button
+5. **Layouts** — manage saved custom zone layouts and the zone editor's snap-to-grid density
 
 ## Built-in Layout Presets
 

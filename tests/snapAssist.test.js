@@ -166,6 +166,34 @@ describe("SnapAssist", () => {
         });
     });
 
+    describe("overlay sizing", () => {
+        it("does not shrink the picker down to a tiny zone's own size", () => {
+            windowTracker = makeWindowTracker([makeWindow()]);
+            assist = new SnapAssist(settings, windowTracker, zoneManager, animations, makeLogger());
+
+            // A "sixths"-sized zone — much smaller than a comfortable picker.
+            const zone = { rect: new Rect(100, 100, 120, 90), zoneIndex: 1 };
+            assist.show("sixths", 0, 0, [zone]);
+
+            const overlay = assist._overlays[0];
+            assert.ok(overlay.width >= 120, `overlay should stay usable-sized, got width=${overlay.width}`);
+            assert.ok(overlay.height >= 90, `overlay should stay usable-sized, got height=${overlay.height}`);
+        });
+
+        it("keeps the overlay within the monitor bounds even anchored at a screen edge", () => {
+            windowTracker = makeWindowTracker([makeWindow()]);
+            assist = new SnapAssist(settings, windowTracker, zoneManager, animations, makeLogger());
+
+            // Zone hugging the top-left corner of a 1920x1080 monitor (default stub).
+            const zone = { rect: new Rect(0, 0, 100, 80), zoneIndex: 0 };
+            assist.show("sixths", 0, 0, [zone]);
+
+            const overlay = assist._overlays[0];
+            assert.ok(overlay.x >= 0, `overlay should not run off the left edge, got x=${overlay.x}`);
+            assert.ok(overlay.y >= 0, `overlay should not run off the top edge, got y=${overlay.y}`);
+        });
+    });
+
     describe("destroyAll", () => {
         it("clears all overlays", () => {
             windowTracker = makeWindowTracker([makeWindow()]);

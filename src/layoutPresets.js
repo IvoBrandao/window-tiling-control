@@ -99,12 +99,12 @@ export const PRESETS = [
  */
 export function getPresetsForAspectRatio(aspectRatio) {
     const isPortrait = aspectRatio < 0.8;
-    const isUltraWide = aspectRatio >= 2.1;
 
     return PRESETS.filter(p => {
+        // Portrait-only presets (e.g. "top-thirds") only make sense on tall
+        // monitors — hide them everywhere else, ultra-wide included.
         if (p.portraitOnly && !isPortrait) return false;
         if (p.minAspectRatio && aspectRatio < p.minAspectRatio) return false;
-        // Hide portrait preset on non-portrait monitors unless ultra-wide
         return true;
     });
 }

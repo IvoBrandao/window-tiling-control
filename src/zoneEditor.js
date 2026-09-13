@@ -22,6 +22,7 @@ import { _ } from "./i18n.js";
 
 const HANDLE_SIZE = 10;
 const MIN_ZONE_PX = 40;
+const TOOLBAR_HEIGHT = 56;
 
 export class ZoneEditor {
     constructor(settings, customZones, zoneManager, animations, logger) {
@@ -102,9 +103,8 @@ export class ZoneEditor {
 
         // Toolbar at bottom
         this._toolbar = this._buildToolbar();
-        const toolbarH = 56;
-        this._toolbar.set_position(0, geom.height - toolbarH);
-        this._toolbar.set_size(geom.width, toolbarH);
+        this._toolbar.set_position(0, geom.height - TOOLBAR_HEIGHT);
+        this._toolbar.set_size(geom.width, TOOLBAR_HEIGHT);
         this._backdrop.add_child(this._toolbar);
 
         Main.uiGroup.add_child(this._backdrop);
@@ -358,9 +358,8 @@ export class ZoneEditor {
 
         // Ignore clicks on the toolbar area
         const geom = this._area ?? global.display.get_monitor_geometry(this._monitorIndex);
-        const toolbarH = 56;
 
-        if (ly > geom.height - toolbarH)
+        if (ly > geom.height - TOOLBAR_HEIGHT)
             return Clutter.EVENT_PROPAGATE;
 
         // Middle-click to delete a zone (coordinate-based for GNOME 47+ compat)
@@ -374,8 +373,6 @@ export class ZoneEditor {
         }
 
         if (button !== 1) // primary button
-            return Clutter.EVENT_PROPAGATE;
-        if (ly > geom.height - toolbarH)
             return Clutter.EVENT_PROPAGATE;
 
         // Check if pressing a handle (coordinate hit-test; event.get_source()
@@ -493,19 +490,35 @@ export class ZoneEditor {
         const dx = (lx - dh.startX) / geom.width;
         const dy = (ly - dh.startY) / geom.height;
 
-        let { x, y, w, h } = dh.origRect;
+        const orig = dh.origRect;
         const edge = dh.edge;
+        const minW = MIN_ZONE_PX / geom.width;
+        const minH = MIN_ZONE_PX / geom.height;
 
-        if (edge.includes("l")) { x += dx; w -= dx; }
-        if (edge.includes("r")) { w += dx; }
-        if (edge.includes("t")) { y += dy; h -= dy; }
-        if (edge.includes("b")) { h += dy; }
+        let { x, y, w, h } = orig;
 
-        // Clamp
-        x = Math.max(0, Math.min(x, 1 - MIN_ZONE_PX / geom.width));
-        y = Math.max(0, Math.min(y, 1 - MIN_ZONE_PX / geom.height));
-        w = Math.max(MIN_ZONE_PX / geom.width, Math.min(w, 1 - x));
-        h = Math.max(MIN_ZONE_PX / geom.height, Math.min(h, 1 - y));
+        // Left/top handles move an edge while the OPPOSITE edge (right/bottom)
+        // must stay anchored in place. Clamping x/y alone (as a naive
+        // `x += dx; w -= dx` followed by `x = clamp(x)` would do) desyncs w/h
+        // from that anchor once the drag overshoots the monitor edge — the
+        // fixed edge would visibly jump. Instead, derive the moving edge from
+        // the anchor so the opposite edge never moves.
+        if (edge.includes("l")) {
+            const right = orig.x + orig.w;
+            x = Math.max(0, Math.min(orig.x + dx, right - minW));
+            w = right - x;
+        }
+        if (edge.includes("r")) {
+            w = Math.max(minW, Math.min(orig.w + dx, 1 - orig.x));
+        }
+        if (edge.includes("t")) {
+            const bottom = orig.y + orig.h;
+            y = Math.max(0, Math.min(orig.y + dy, bottom - minH));
+            h = bottom - y;
+        }
+        if (edge.includes("b")) {
+            h = Math.max(minH, Math.min(orig.h + dy, 1 - orig.y));
+        }
 
         const snapped = this._snapToGrid({ x, y, w, h });
         zone.normRect = snapped;
@@ -562,12 +575,18 @@ export class ZoneEditor {
 
         const snap = (v, divisions) => Math.round(v * divisions) / divisions;
 
-        return {
-            x: snap(normRect.x, cols),
-            y: snap(normRect.y, rows),
-            w: Math.max(snap(normRect.w, cols), 1 / cols),
-            h: Math.max(snap(normRect.h, rows), 1 / rows),
-        };
+        const w = Math.max(snap(normRect.w, cols), 1 / cols);
+        const h = Math.max(snap(normRect.h, rows), 1 / rows);
+
+        // x and w (resp. y and h) are snapped independently, so rounding can
+        // push x (or y) up to a grid line whose width no longer fits before
+        // the right/bottom edge of the monitor (e.g. x snaps to 1.0 while w
+        // snaps to a minimum column width, giving x+w > 1). Re-clamp against
+        // the snapped size so a zone can never extend past the monitor edge.
+        const x = Math.max(0, Math.min(snap(normRect.x, cols), 1 - w));
+        const y = Math.max(0, Math.min(snap(normRect.y, rows), 1 - h));
+
+        return { x, y, w, h };
     }
 
     // ------------------------------------------------------------------ private — save

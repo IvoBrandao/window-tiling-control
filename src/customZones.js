@@ -65,9 +65,24 @@ export const CustomZoneStore = GObject.registerClass(
             this._save(all);
         }
 
-        /** Generate a unique ID for a new set. */
+        /**
+         * Generate a unique ID for a new set.
+         *
+         * Date.now() alone is not sufficient: two sets created within the same
+         * millisecond (e.g. a fast double-click on "Save", or scripted callers)
+         * would collide, and addZoneSet() silently drops anything whose id
+         * already exists — so a naive timestamp-only id could quietly lose data.
+         * Disambiguate against the current store when needed.
+         */
         generateId() {
-            return `custom-${Date.now()}`;
+            const base = `custom-${Date.now()}`;
+            const all = this.getAll();
+            if (!all.some(s => s.id === base))
+                return base;
+            let n = 1;
+            while (all.some(s => s.id === `${base}-${n}`))
+                n++;
+            return `${base}-${n}`;
         }
 
         // ---------------------------------------------------------------- private

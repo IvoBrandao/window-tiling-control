@@ -4,7 +4,8 @@
  *
  * Adds a "WindowTilingControl" entry to the Quick Settings panel with:
  *   - Enable/disable master toggle
- *   - Sub-switches for Snap Overlay, Snap Assist, Zone Highlights, Snap Groups
+ *   - Sub-switches for Snap Overlay, Snap Assist, Zone Highlights, Snap
+ *     Groups, and Rounded Corners
  *   - "Edit Zones…" action row that opens the Zone Editor
  *   - "Preferences…" action row that opens the extension preferences
  */
@@ -122,7 +123,7 @@ const WindowTilingControlIndicator = GObject.registerClass(
         destroy() {
             try {
                 this._toggle?.destroy();
-            } catch (_) { /* already disposed */ }
+            } catch (_e) { /* already disposed */ }
             this._toggle = null;
             super.destroy();
         }
@@ -156,10 +157,10 @@ export class Indicator {
             // QuickSettings items when the panel is rebuilt or on lock screen).
             try {
                 this._indicator.quickSettingsItems.forEach(i => i.destroy());
-            } catch (_) { /* already disposed */ }
+            } catch (_e) { /* already disposed */ }
             try {
                 this._indicator.destroy();
-            } catch (_) { /* already disposed */ }
+            } catch (_e) { /* already disposed */ }
             this._indicator = null;
         }
         this._log?.info("Indicator: disabled");

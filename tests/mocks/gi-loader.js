@@ -122,6 +122,12 @@ const MetaStub = {
     KeyBindingFlags: { NONE: 0, IS_REVERSED: 1 },
     GrabOp: { MOVING: 1 },
     DisplayDirection: { LEFT: 0, RIGHT: 1, UP: 2, DOWN: 3 },
+    WindowType: {
+        NORMAL: 0, DESKTOP: 1, DOCK: 2, DIALOG: 3, MODAL_DIALOG: 4,
+        TOOLBAR: 5, MENU: 6, UTILITY: 7, SPLASHSCREEN: 8,
+        DROPDOWN_MENU: 9, POPUP_MENU: 10, TOOLTIP: 11, NOTIFICATION: 12,
+        COMBO: 13, DND: 14, OVERRIDE_OTHER: 15,
+    },
 };
 
 // ── Gio (SettingsBindFlags only — no real GSettings needed in tests) ──────────
@@ -135,7 +141,19 @@ const GioStub = {
 const ClutterStub = {
     AnimationMode: { EASE_OUT_CUBIC: 3, LINEAR: 1 },
     ActorAlign: { CENTER: 0, START: 1, END: 2, FILL: 3 },
-    EventType: { BUTTON_PRESS: 1 },
+    EventType: {
+        BUTTON_PRESS: 1, MOTION: 2, BUTTON_RELEASE: 3,
+        KEY_PRESS: 4, KEY_RELEASE: 5,
+    },
+    ModifierType: { SHIFT_MASK: 1 },
+    ShaderType: { VERTEX_SHADER: 1, FRAGMENT_SHADER: 2 },
+    ShaderEffect: class ShaderEffect {
+        constructor(props = {}) { Object.assign(this, props); this._uniforms = {}; }
+        set_shader_source(src) { this._shaderSource = src; }
+        set_uniform_value(name, value) { this._uniforms[name] = value; }
+    },
+    EVENT_STOP: true,
+    EVENT_PROPAGATE: false,
 };
 
 // ── St (UI widget constructors) ──────────────────────────────────────────────
@@ -224,6 +242,12 @@ let wm = {};
 let extensionManager = {};
 let uiGroup = {};
 
+// pushModal/popModal: real GNOME Shell returns a grab handle with a
+// dismiss() method; tests can override the implementation (e.g. to
+// simulate a failed grab) via globalThis.__wtcMainSet__("pushModal", fn).
+let pushModal = (actor, params) => ({ actor, params, dismiss() {} });
+let popModal = (_grab) => {};
+
 globalThis.__wtcMainSet__ = function _setMain(prop, value) {
     switch (prop) {
         case "panel": panel = value; break;
@@ -232,11 +256,13 @@ globalThis.__wtcMainSet__ = function _setMain(prop, value) {
         case "wm": wm = value; break;
         case "extensionManager": extensionManager = value; break;
         case "uiGroup": uiGroup = value; break;
+        case "pushModal": pushModal = value; break;
+        case "popModal": popModal = value; break;
     }
 };
 
-export { panel, overview, sessionMode, wm, extensionManager, uiGroup };
-export default { panel, overview, sessionMode, wm, extensionManager, uiGroup };
+export { panel, overview, sessionMode, wm, extensionManager, uiGroup, pushModal, popModal };
+export default { panel, overview, sessionMode, wm, extensionManager, uiGroup, pushModal, popModal };
 `;
 
 // ── Mapping from specifier → stub module ─────────────────────────────────────

@@ -6,80 +6,120 @@
  *   1. General      — master switch + window gap + drag threshold + log level
  *   2. Features     — toggle cards for each feature
  *   3. Appearance   — snap-assist timeout, animation speed, highlight colors
- *   4. Keybindings  — one row per keybinding with ShortcutLabel capture
- *   5. Layouts      — custom zone sets CRUD
+ *   4. Keybindings  — one row per keybinding with ShortcutLabel capture,
+ *                     grouped by tiling / quarters / move-swap / focus /
+ *                     modes / monitor / layout / advanced (unbound) shortcuts
+ *   5. Layouts      — custom zone sets CRUD + zone editor grid density
  */
 
 import Adw from "gi://Adw";
 import Gtk from "gi://Gtk";
 import Gdk from "gi://Gdk";
 import Gio from "gi://Gio";
-import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
+import { ExtensionPreferences, gettext as _ } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
 
 const UUID = "window-tiling-control@gnome-tiling";
 const SCHEMA_ID = "org.gnome.shell.extensions.window-tiling-control";
 const KB_SCHEMA_ID = "org.gnome.shell.extensions.window-tiling-control.keybindings";
 
 // ── Keybinding groups for Keybindings page (i3-inspired layout) ──────────────
+//
+// NOTE: every key listed here must have a matching <key> entry in the
+// .keybindings child schema AND a registration in src/keybindings.js.
+// KB_GROUPS should cover every registered keybinding so users always have a
+// way to see/rebind it from the preferences window — including the
+// "unbound by default" advanced zone shortcuts.
 const KB_GROUPS = [
     {
-        title: "Window Tiling",
-        description: "Super + arrow key snaps the focused window. Quarter-tiled windows navigate between quarters first.",
+        title: _("Window Tiling"),
+        description: _("Super + arrow key snaps the focused window. Quarter-tiled windows navigate between quarters first."),
         rows: [
-            { key: "snap-left-half",     label: "Tile Left / Navigate Left",  desc: "Snap to left half, or move quarter leftward" },
-            { key: "snap-right-half",    label: "Tile Right / Navigate Right", desc: "Snap to right half, or move quarter rightward" },
-            { key: "snap-upper-quarter", label: "Tile Up / Navigate Up",       desc: "Snap to upper quarter, or move quarter upward" },
-            { key: "snap-lower-quarter", label: "Tile Down / Navigate Down",   desc: "Snap to lower quarter, or move quarter downward" },
+            { key: "snap-left-half",     label: _("Tile Left / Navigate Left"),  desc: _("Snap to left half, or move quarter leftward") },
+            { key: "snap-right-half",    label: _("Tile Right / Navigate Right"), desc: _("Snap to right half, or move quarter rightward") },
+            { key: "snap-upper-quarter", label: _("Tile Up / Navigate Up"),       desc: _("Snap to upper quarter, or move quarter upward") },
+            { key: "snap-lower-quarter", label: _("Tile Down / Navigate Down"),   desc: _("Snap to lower quarter, or move quarter downward") },
         ],
     },
     {
-        title: "Direct Quarter Tiling",
-        description: "Super + U/I/J/K for instant quarter placement (spatial layout on keyboard).",
+        title: _("Direct Quarter Tiling"),
+        description: _("Super + U/I/J/K for instant quarter placement (spatial layout on keyboard)."),
         rows: [
-            { key: "snap-top-left",      label: "Quarter: Top-Left (U)",     desc: "Snap directly to top-left quarter" },
-            { key: "snap-top-right",     label: "Quarter: Top-Right (I)",    desc: "Snap directly to top-right quarter" },
-            { key: "snap-bottom-left",   label: "Quarter: Bottom-Left (J)",  desc: "Snap directly to bottom-left quarter" },
-            { key: "snap-bottom-right",  label: "Quarter: Bottom-Right (K)", desc: "Snap directly to bottom-right quarter" },
+            { key: "snap-top-left",      label: _("Quarter: Top-Left (U)"),     desc: _("Snap directly to top-left quarter") },
+            { key: "snap-top-right",     label: _("Quarter: Top-Right (I)"),    desc: _("Snap directly to top-right quarter") },
+            { key: "snap-bottom-left",   label: _("Quarter: Bottom-Left (J)"),  desc: _("Snap directly to bottom-left quarter") },
+            { key: "snap-bottom-right",  label: _("Quarter: Bottom-Right (K)"), desc: _("Snap directly to bottom-right quarter") },
         ],
     },
     {
-        title: "Move / Swap Window",
-        description: "Super+Shift + arrow key moves a window to the adjacent zone. Swaps with the occupant if that zone is taken.",
+        title: _("Move / Swap Window"),
+        description: _("Super+Shift + arrow key moves a window to the adjacent zone. Swaps with the occupant if that zone is taken."),
         rows: [
-            { key: "move-swap-left",  label: "Move/Swap Left",  desc: "Move window one zone left, swap if occupied" },
-            { key: "move-swap-right", label: "Move/Swap Right", desc: "Move window one zone right, swap if occupied" },
-            { key: "move-swap-up",    label: "Move/Swap Up",    desc: "Move window one zone up, swap if occupied" },
-            { key: "move-swap-down",  label: "Move/Swap Down",  desc: "Move window one zone down, swap if occupied" },
+            { key: "move-swap-left",  label: _("Move/Swap Left"),  desc: _("Move window one zone left, swap if occupied") },
+            { key: "move-swap-right", label: _("Move/Swap Right"), desc: _("Move window one zone right, swap if occupied") },
+            { key: "move-swap-up",    label: _("Move/Swap Up"),    desc: _("Move window one zone up, swap if occupied") },
+            { key: "move-swap-down",  label: _("Move/Swap Down"),  desc: _("Move window one zone down, swap if occupied") },
         ],
     },
     {
-        title: "Focus & Auto-Tile",
-        description: "Cycle focus between tiled windows or auto-tile all visible windows into the active grid layout.",
+        title: _("Directional Focus (i3-style)"),
+        description: _("Super+Alt + arrow key moves keyboard focus to the nearest window in that direction, without moving anything."),
         rows: [
-            { key: "focus-cycle-tiled", label: "Cycle Focus (Tiled Windows)", desc: "Move focus to the next snapped window" },
-            { key: "auto-tile-grid",    label: "Auto-Tile to Active Grid",    desc: "Tile all visible windows into the active layout" },
+            { key: "focus-left",  label: _("Focus Left"),  desc: _("Focus the nearest window to the left") },
+            { key: "focus-right", label: _("Focus Right"), desc: _("Focus the nearest window to the right") },
+            { key: "focus-up",    label: _("Focus Up"),    desc: _("Focus the nearest window above") },
+            { key: "focus-down",  label: _("Focus Down"),  desc: _("Focus the nearest window below") },
         ],
     },
     {
-        title: "Monitor Movement",
-        description: "Super+Ctrl + arrow key moves the focused window to an adjacent monitor.",
+        title: _("Focus & Auto-Tile"),
+        description: _("Cycle focus between tiled windows or auto-tile all visible windows into the active grid layout."),
         rows: [
-            { key: "move-monitor-left",  label: "Move to Left Monitor",  desc: "Move window to the monitor on the left" },
-            { key: "move-monitor-right", label: "Move to Right Monitor", desc: "Move window to the monitor on the right" },
+            { key: "focus-cycle-tiled", label: _("Cycle Focus (Tiled Windows)"), desc: _("Move focus to the next snapped window") },
+            { key: "auto-tile-grid",    label: _("Auto-Tile to Active Grid"),    desc: _("Tile all visible windows into the active layout") },
         ],
     },
     {
-        title: "Layout & Overlay",
-        description: "Shortcuts for layout management and the snap overlay.",
+        title: _("Modes & Help"),
+        description: _("Enter keyboard resize mode, or hold to reveal a shortcut cheat sheet."),
         rows: [
-            { key: "open-snap-overlay",  label: "Open Snap Layout Picker", desc: "Show the Super+Z layout chooser popup" },
-            { key: "open-zone-editor",   label: "Open Zone Editor",        desc: "Full-screen drag-to-draw zone editor" },
-            { key: "cycle-preset-next",  label: "Cycle Preset →",          desc: "Switch to the next layout preset" },
-            { key: "cycle-preset-prev",  label: "← Cycle Preset",          desc: "Switch to the previous layout preset" },
-            { key: "restore-snap-group", label: "Restore Snap Group",      desc: "Reposition windows to their last snap group" },
+            { key: "toggle-resize-mode", label: _("Keyboard Resize Mode"),    desc: _("Arrow keys resize the focused window; Escape/Enter to exit") },
+            { key: "show-shortcuts",     label: _("Show Keyboard Shortcuts"), desc: _("Hold to show the cheat sheet; release to dismiss") },
         ],
+    },
+    {
+        title: _("Monitor Movement"),
+        description: _("Super+Ctrl + arrow key moves the focused window to an adjacent monitor."),
+        rows: [
+            { key: "move-monitor-left",  label: _("Move to Left Monitor"),  desc: _("Move window to the monitor on the left") },
+            { key: "move-monitor-right", label: _("Move to Right Monitor"), desc: _("Move window to the monitor on the right") },
+        ],
+    },
+    {
+        title: _("Layout & Overlay"),
+        description: _("Shortcuts for layout management and the snap overlay."),
+        rows: [
+            { key: "open-snap-overlay",  label: _("Open Snap Layout Picker"), desc: _("Show the Super+Z layout chooser popup") },
+            { key: "open-zone-editor",   label: _("Open Zone Editor"),        desc: _("Full-screen drag-to-draw zone editor") },
+            { key: "cycle-preset-next",  label: _("Cycle Preset →"),          desc: _("Switch to the next layout preset") },
+            { key: "cycle-preset-prev",  label: _("← Cycle Preset"),          desc: _("Switch to the previous layout preset") },
+            { key: "restore-snap-group", label: _("Restore Snap Group"),      desc: _("Reposition windows to their last snap group") },
+        ],
+    },
+    {
+        title: _("Advanced: Direct Zone Snap"),
+        description: _("Unbound by default. Assign a shortcut to snap the focused window straight into a specific zone of the active layout."),
+        rows: [1, 2, 3, 4, 5, 6].map(n => ({
+            key: `snap-to-zone-${n}`,
+            label: _("Snap to Zone %d").replace("%d", String(n)),
+            desc: _("Snap the focused window directly into zone %d of the active layout").replace("%d", String(n)),
+        })),
     },
 ];
+
+/** Flat lookup of keybinding key → human label, used for conflict warnings. */
+const KB_LABEL_BY_KEY = Object.fromEntries(
+    KB_GROUPS.flatMap(group => group.rows.map(row => [row.key, row.label]))
+);
 
 export default class WindowTilingControlPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -98,52 +138,55 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
     _buildGeneralPage(settings) {
         const page = new Adw.PreferencesPage({
-            title: "General",
+            title: _("General"),
             icon_name: "preferences-system-symbolic",
         });
 
-        const group = new Adw.PreferencesGroup({ title: "General Settings" });
+        const group = new Adw.PreferencesGroup({ title: _("General Settings") });
         page.add(group);
 
         // Master enable
         group.add(this._switchRow(
             settings, "tiling-enabled",
-            "Enable Window Tiling",
-            "Master switch for all window tiling features"
+            _("Enable Window Tiling"),
+            _("Master switch for all window tiling features")
         ));
 
         // Inner gap (between tiled windows)
         group.add(this._spinRow(
             settings, "window-gap-size",
-            "Inner Gap (px)",
-            "Gap between adjacent tiled windows",
+            _("Inner Gap (px)"),
+            _("Gap between adjacent tiled windows"),
             0, 40, 1
         ));
 
         // Outer gap (screen-edge)
         group.add(this._spinRow(
             settings, "outer-gap-size",
-            "Outer Gap (px)",
-            "Gap between tiled windows and the screen edges (0 = follow inner gap)",
+            _("Outer Gap (px)"),
+            _("Gap between tiled windows and the screen edges (0 = follow inner gap)"),
             0, 80, 1
         ));
 
-        // Drag edge threshold
+        // Drag edge threshold. NB: the schema declares <range min="5" max="100"/>
+        // (org.gnome.shell.extensions.window-tiling-control#drag-edge-threshold) —
+        // the spin button's lower bound must match or GSettings will refuse/clamp
+        // values below 5 that the widget otherwise lets the user select.
         group.add(this._spinRow(
             settings, "drag-edge-threshold",
-            "Drag Edge Threshold (px)",
-            "Distance from monitor edge that triggers zone detection",
-            0, 100, 1
+            _("Drag Edge Threshold (px)"),
+            _("Distance from monitor edge that triggers zone detection"),
+            5, 100, 1
         ));
 
         // Log level
-        const logGroup = new Adw.PreferencesGroup({ title: "Diagnostics" });
+        const logGroup = new Adw.PreferencesGroup({ title: _("Diagnostics") });
         page.add(logGroup);
         logGroup.add(this._comboRow(
             settings, "log-level",
-            "Log Level",
-            "Verbosity of debug output in journalctl",
-            ["Off", "Error", "Warning", "Info", "Debug"]
+            _("Log Level"),
+            _("Verbosity of debug output in journalctl"),
+            [_("Off"), _("Error"), _("Warning"), _("Info"), _("Debug")]
         ));
 
         return page;
@@ -153,19 +196,19 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
     _buildFeaturesPage(settings) {
         const page = new Adw.PreferencesPage({
-            title: "Features",
+            title: _("Features"),
             icon_name: "view-grid-symbolic",
         });
 
-        const group = new Adw.PreferencesGroup({ title: "Feature Toggles" });
+        const group = new Adw.PreferencesGroup({ title: _("Feature Toggles") });
         page.add(group);
 
         const rows = [
-            ["snap-overlay-enabled",       "Snap Layout Picker",        "Super+Z overlay for choosing a layout"],
-            ["snap-assist-enabled",        "Snap Assist",               "Show window thumbnails for remaining zones after snapping"],
-            ["drag-zone-highlight-enabled","Zone Highlights on Drag",   "Highlight zones while dragging a window"],
-            ["snap-groups-enabled",        "Snap Groups in Panel",      "Show snap group button in the top panel"],
-            ["persist-snap-groups",        "Remember Apps Across Relaunch", "Re-snap an app to its last zone when it reopens (if free)"],
+            ["snap-overlay-enabled",       _("Snap Layout Picker"),        _("Super+Z overlay for choosing a layout")],
+            ["snap-assist-enabled",        _("Snap Assist"),               _("Show window thumbnails for remaining zones after snapping")],
+            ["drag-zone-highlight-enabled",_("Zone Highlights on Drag"),   _("Highlight zones while dragging a window")],
+            ["snap-groups-enabled",        _("Snap Groups in Panel"),      _("Show snap group button in the top panel")],
+            ["persist-snap-groups",        _("Remember Apps Across Relaunch"), _("Re-snap an app to its last zone when it reopens (if free)")],
         ];
 
         for (const [key, title, subtitle] of rows)
@@ -178,70 +221,73 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
     _buildAppearancePage(settings) {
         const page = new Adw.PreferencesPage({
-            title: "Appearance",
+            title: _("Appearance"),
             icon_name: "applications-graphics-symbolic",
         });
 
-        const timingGroup = new Adw.PreferencesGroup({ title: "Timing" });
+        const timingGroup = new Adw.PreferencesGroup({ title: _("Timing") });
         page.add(timingGroup);
 
+        // NB: the schema declares <range min="2" max="30"/> for
+        // snap-assist-timeout — keep this lower bound in sync (it used to
+        // allow 1, below the schema's declared minimum).
         timingGroup.add(this._spinRow(
             settings, "snap-assist-timeout",
-            "Snap Assist Timeout (s)",
-            "Seconds before Snap Assist auto-dismisses",
-            1, 30, 1
+            _("Snap Assist Timeout (s)"),
+            _("Seconds before Snap Assist auto-dismisses"),
+            2, 30, 1
         ));
 
         timingGroup.add(this._switchRow(
             settings, "animations-enabled",
-            "Enable Animations",
-            "Master switch — turn off for instant, animation-free snapping"
+            _("Enable Animations"),
+            _("Master switch — turn off for instant, animation-free snapping")
         ));
 
         timingGroup.add(this._comboRow(
             settings, "animation-speed",
-            "Animation Speed",
-            "Speed of snap and overlay animations (ignored when animations are disabled)",
-            ["Off", "Fast", "Normal", "Slow"]
+            _("Animation Speed"),
+            _("Speed of snap and overlay animations (ignored when animations are disabled)"),
+            [_("Off"), _("Fast"), _("Normal"), _("Slow")]
         ));
 
         const colorGroup = new Adw.PreferencesGroup({
-            title: "Zone Colors",
-            description: "Custom colors apply only when the system accent color is turned off.",
+            title: _("Zone Colors"),
+            description: _("Custom colors apply only when the system accent color is turned off."),
         });
         page.add(colorGroup);
 
         colorGroup.add(this._switchRow(
             settings, "use-accent-color",
-            "Use System Accent Color",
-            "Tint zone highlights with the GNOME accent color (GNOME 47+)"
+            _("Use System Accent Color"),
+            _("Tint zone highlights with the GNOME accent color (GNOME 47+)")
         ));
 
         colorGroup.add(this._colorRow(
             settings, "zone-highlight-color",
-            "Highlight Fill Color",
-            "RGBA fill color of hovered zone highlight"
+            _("Highlight Fill Color"),
+            _("RGBA fill color of hovered zone highlight")
         ));
 
         colorGroup.add(this._colorRow(
             settings, "zone-border-color",
-            "Highlight Border Color",
-            "RGBA border color of hovered zone highlight"
+            _("Highlight Border Color"),
+            _("RGBA border color of hovered zone highlight")
         ));
 
-        const cornersGroup = new Adw.PreferencesGroup({ title: "Window Corners" });
+        const cornersGroup = new Adw.PreferencesGroup({ title: _("Window Corners") });
         page.add(cornersGroup);
 
         cornersGroup.add(this._switchRow(
             settings, "rounded-corners-enabled",
-            "Rounded Window Corners",
-            "Clip normal windows to rounded corners (skips maximized/fullscreen)"
+            _("Rounded Window Corners"),
+            _("Clip normal windows to rounded corners (skips maximized/fullscreen)")
         ));
 
         cornersGroup.add(this._spinRow(
             settings, "rounded-corners-radius",
-            "Corner Radius (px)",
-            "Radius of the rounded window corners",
+            _("Corner Radius (px)"),
+            _("Radius of the rounded window corners"),
             0, 40, 1
         ));
 
@@ -252,7 +298,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
     _buildKeybindingsPage(kbSettings) {
         const page = new Adw.PreferencesPage({
-            title: "Keybindings",
+            title: _("Keybindings"),
             icon_name: "input-keyboard-symbolic",
         });
 
@@ -273,11 +319,11 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
         page.add(resetGroup);
 
         const resetRow = new Adw.ActionRow({
-            title: "Reset All Keybindings",
-            subtitle: "Restore all shortcuts to their i3-inspired defaults",
+            title: _("Reset All Keybindings"),
+            subtitle: _("Restore all shortcuts to their i3-inspired defaults"),
         });
         const resetBtn = new Gtk.Button({
-            label: "Reset",
+            label: _("Reset"),
             valign: Gtk.Align.CENTER,
             css_classes: ["destructive-action"],
         });
@@ -303,13 +349,13 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
     _buildLayoutsPage(settings) {
         const page = new Adw.PreferencesPage({
-            title: "Layouts",
+            title: _("Layouts"),
             icon_name: "view-paged-symbolic",
         });
 
         const group = new Adw.PreferencesGroup({
-            title: "Custom Zone Layouts",
-            description: "Saved zone sets you can use as snap targets",
+            title: _("Custom Zone Layouts"),
+            description: _("Saved zone sets you can use as snap targets"),
         });
         page.add(group);
 
@@ -322,10 +368,34 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             icon_name: "list-add-symbolic",
             valign: Gtk.Align.CENTER,
             css_classes: ["flat"],
-            tooltip_text: "Add new zone layout",
+            tooltip_text: _("Add new zone layout"),
         });
         addBtn.connect("clicked", () => this._addLayoutPlaceholder());
         group.set_header_suffix(addBtn);
+
+        // Zone editor snap-to-grid density. These map to zone-editor-grid-columns
+        // / zone-editor-grid-rows, which previously had no preferences UI at all
+        // even though they are user-facing (read by src/zoneEditor.js when
+        // drawing the snap-to-grid overlay).
+        const gridGroup = new Adw.PreferencesGroup({
+            title: _("Zone Editor Grid"),
+            description: _("Density of the snap-to-grid guide shown while drawing zones in the full-screen Zone Editor (Super+E)."),
+        });
+        page.add(gridGroup);
+
+        gridGroup.add(this._spinRow(
+            settings, "zone-editor-grid-columns",
+            _("Grid Columns"),
+            _("Number of column divisions in the zone editor snap grid"),
+            4, 24, 1
+        ));
+
+        gridGroup.add(this._spinRow(
+            settings, "zone-editor-grid-rows",
+            _("Grid Rows"),
+            _("Number of row divisions in the zone editor snap grid"),
+            4, 16, 1
+        ));
 
         return page;
     }
@@ -346,15 +416,15 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
         for (const set of sets) {
             const row = new Adw.ActionRow({
-                title: set.label ?? "Unnamed",
-                subtitle: `${(set.zones ?? []).length} zones`,
+                title: set.label ?? _("Unnamed"),
+                subtitle: `${(set.zones ?? []).length} ${_("zones")}`,
             });
 
             const deleteBtn = new Gtk.Button({
                 icon_name: "user-trash-symbolic",
                 valign: Gtk.Align.CENTER,
                 css_classes: ["flat", "destructive-action"],
-                tooltip_text: "Delete this layout",
+                tooltip_text: _("Delete this layout"),
             });
             deleteBtn.connect("clicked", () => {
                 const updated = raw.filter(s => {
@@ -373,8 +443,8 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
     _addLayoutPlaceholder() {
         // Add a blank entry that tells the user to use the in-shell editor
         const infoRow = new Adw.ActionRow({
-            title: "Open the Zone Editor",
-            subtitle: "Use Super+E or the Quick Settings button to draw zones",
+            title: _("Open the Zone Editor"),
+            subtitle: _("Use Super+E or the Quick Settings button to draw zones"),
         });
         this._layoutGroup.add(infoRow);
         this._layoutRows.push(infoRow);
@@ -423,8 +493,10 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             const dialog = new Gtk.ColorDialog({ title, with_alpha: true });
             colorWidget = new Gtk.ColorDialogButton({ dialog, valign: Gtk.Align.CENTER });
             this._bindColor(settings, key, colorWidget, "rgba", true);
-        } catch (_) {
-            // Fallback for GNOME 45
+        } catch (_e) {
+            // Fallback for GNOME 45. NB: this catch parameter must not be
+            // named "_" — that would shadow the imported gettext `_()`
+            // function for the rest of this block.
             colorWidget = new Gtk.ColorButton({ use_alpha: true, valign: Gtk.Align.CENTER });
             this._bindColor(settings, key, colorWidget, "rgba", false);
         }
@@ -453,7 +525,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
         const shortcutLabel = new Gtk.ShortcutLabel({
             valign: Gtk.Align.CENTER,
-            disabled_text: "Disabled",
+            disabled_text: _("Disabled"),
         });
 
         const currentBindings = kbSettings.get_strv(key);
@@ -463,10 +535,10 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
         // GTK accelerator string.  This always works, even for Super-based
         // combos that the compositor would otherwise grab.
         const setBtn = new Gtk.Button({
-            label: "Set Shortcut",
+            label: _("Set Shortcut"),
             valign: Gtk.Align.CENTER,
             css_classes: ["flat"],
-            tooltip_text: "Type a shortcut string (e.g. <Super>Left)",
+            tooltip_text: _("Type a shortcut string (e.g. <Super>Left)"),
         });
         setBtn.connect("clicked", () => this._typeShortcut(row, kbSettings, key, shortcutLabel));
 
@@ -474,17 +546,42 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             icon_name: "edit-clear-symbolic",
             valign: Gtk.Align.CENTER,
             css_classes: ["flat"],
-            tooltip_text: "Clear shortcut",
+            tooltip_text: _("Clear shortcut"),
         });
         clearBtn.connect("clicked", () => {
             kbSettings.set_strv(key, []);
             shortcutLabel.set_accelerator("");
         });
 
+        // Keep the label in sync if this key changes from elsewhere — e.g.
+        // the "Reset All" button, or another row's dialog "stealing" this
+        // accelerator away via the conflict-reassignment flow below.
+        const changedId = kbSettings.connect(`changed::${key}`, () => {
+            shortcutLabel.set_accelerator(kbSettings.get_strv(key)[0] ?? "");
+        });
+        row.connect("destroy", () => kbSettings.disconnect(changedId));
+
         row.add_suffix(shortcutLabel);
         row.add_suffix(setBtn);
         row.add_suffix(clearBtn);
         return row;
+    }
+
+    /**
+     * Find another keybinding (besides `excludeKey`) that is already bound to
+     * `accel`, so callers can warn before silently creating a conflicting
+     * shortcut (two actions grabbing the same accelerator otherwise fail
+     * silently — Mutter honours whichever one was registered first).
+     * @returns {string|null} the conflicting key name, or null if none.
+     */
+    _findKeybindingConflict(kbSettings, accel, excludeKey) {
+        const keys = kbSettings.settings_schema?.list_keys() ?? [];
+        for (const otherKey of keys) {
+            if (otherKey === excludeKey) continue;
+            if (kbSettings.get_strv(otherKey).includes(accel))
+                return otherKey;
+        }
+        return null;
     }
 
     /**
@@ -494,7 +591,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
      */
     _typeShortcut(parentRow, kbSettings, key, shortcutLabel) {
         const dialog = new Gtk.Dialog({
-            title: `Type shortcut for: ${parentRow.title}`,
+            title: _("Type shortcut for: %s").replace("%s", parentRow.title),
             modal: true,
             resizable: false,
         });
@@ -506,7 +603,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
         const content = dialog.get_content_area();
 
         const hintLabel = new Gtk.Label({
-            label: "Type the shortcut string using GTK format:\n" +
+            label: _("Type the shortcut string using GTK format:") + "\n" +
                    "  <Super>Left   <Super>z   <Primary><Alt>t\n" +
                    "  <Super>Home   <Super><Shift>Right",
             margin_top: 16,
@@ -536,6 +633,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             margin_bottom: 16,
             margin_start: 24,
             margin_end: 24,
+            wrap: true,
             css_classes: ["dim-label"],
         });
         content.append(statusLabel);
@@ -549,30 +647,56 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             halign: Gtk.Align.END,
         });
 
-        const cancelBtn = new Gtk.Button({ label: "Cancel" });
+        const cancelBtn = new Gtk.Button({ label: _("Cancel") });
         cancelBtn.connect("clicked", () => dialog.close());
         btnBox.append(cancelBtn);
 
         const applyBtn = new Gtk.Button({
-            label: "Apply",
+            label: _("Apply"),
             css_classes: ["suggested-action"],
         });
+
+        // A conflict warning requires a second click to confirm reassignment
+        // (it "steals" the accelerator from the other action). Any edit to
+        // the entry clears the pending confirmation so a stale click can't
+        // silently reassign a *different*, unreviewed shortcut.
+        let pendingConflictKey = null;
+        entry.connect("changed", () => {
+            pendingConflictKey = null;
+            applyBtn.set_label(_("Apply"));
+        });
+
         applyBtn.connect("clicked", () => {
             const text = entry.get_text().trim();
             if (!text) {
-                statusLabel.set_text("Enter a shortcut string.");
+                statusLabel.set_text(_("Enter a shortcut string."));
                 return;
             }
 
             // Validate the accelerator string
             const [valid, parsedKey, parsedMods] = Gtk.accelerator_parse(text);
             if (!valid || parsedKey === 0) {
-                statusLabel.set_text(`"${text}" is not a valid GTK shortcut.`);
+                statusLabel.set_text(_("\"%s\" is not a valid GTK shortcut.").replace("%s", text));
                 return;
             }
 
             // Normalise to canonical form
             const canonical = Gtk.accelerator_name(parsedKey, parsedMods);
+
+            const conflictKey = this._findKeybindingConflict(kbSettings, canonical, key);
+            if (conflictKey && pendingConflictKey !== conflictKey) {
+                const conflictLabel = KB_LABEL_BY_KEY[conflictKey] ?? conflictKey;
+                statusLabel.set_text(
+                    _("Already used by \"%s\". Click Apply again to move it here.").replace("%s", conflictLabel)
+                );
+                pendingConflictKey = conflictKey;
+                applyBtn.set_label(_("Apply Anyway"));
+                return;
+            }
+
+            if (conflictKey)
+                kbSettings.set_strv(conflictKey, []);
+
             kbSettings.set_strv(key, [canonical]);
             shortcutLabel.set_accelerator(canonical);
             dialog.close();

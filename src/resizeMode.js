@@ -18,7 +18,12 @@ const KEY = {
 };
 
 const STEP = 50;      // px per keypress
-const STEP_FINE = 20; // px when Shift is held
+// px per keypress when Shift is held. Must stay ABOVE WindowTracker's
+// resize-propagation tolerance (30px, see windowTracker.js _onWindowResized)
+// — a fine step at or below that tolerance would be indistinguishable from
+// "no real resize" on every single keypress, so a snapped window's shared
+// edge with its neighbours would never actually propagate while fine-resizing.
+const STEP_FINE = 40;
 const MIN = 120;      // minimum window dimension
 
 export class ResizeMode {
@@ -47,7 +52,7 @@ export class ResizeMode {
     enter() {
         if (this._actor) return;
         const win = global.display.get_focus_window();
-        if (!win || (!win.allows_resize?.() ?? false)) return;
+        if (!win || !win.allows_resize?.()) return;
         this._window = win;
 
         // Transparent full-screen grabber so arrow keys don't reach apps.
@@ -127,18 +132,48 @@ export class ResizeMode {
         const r = win.get_frame_rect();
         const wa = this._zoneManager?._getWorkarea?.(win.get_monitor());
 
-        let width = Math.max(MIN, r.width + dw);
-        let height = Math.max(MIN, r.height + dh);
+        // Which edges already sit on the workarea boundary? The edge that
+        // ISN'T on the boundary is the one that's either free-floating or
+        // shares a border with a tiled neighbour, so that's the edge that
+        // should move — anchoring the boundary edge in place. Without this,
+        // resize always grew/shrank the right/bottom edge regardless of
+        // layout, so a window whose SHARED border with its neighbour was on
+        // its left or top (e.g. the right half of a halves split, or a
+        // top-right/bottom-right quarter) could never have that border
+        // resized at all — only its already-fixed screen-edge side moved.
+        // Purely geometry-based (current frame vs. workarea), so it works
+        // for every preset — halves, quarters, thirds, sixths, custom zones
+        // — not just the slots directionalMove.js knows how to name.
+        const EDGE_TOL = 4;
+        const leftIsOuter   = !!wa && Math.abs(r.x - wa.x) < EDGE_TOL;
+        const rightIsOuter  = !!wa && Math.abs((r.x + r.width)  - (wa.x + wa.width))  < EDGE_TOL;
+        const topIsOuter    = !!wa && Math.abs(r.y - wa.y) < EDGE_TOL;
+        const bottomIsOuter = !!wa && Math.abs((r.y + r.height) - (wa.y + wa.height)) < EDGE_TOL;
 
-        // Keep the window within the workarea (grow toward the interior).
+        // If neither (or both) edge on an axis is outer — a free-floating
+        // window, or one already spanning the full width/height — fall back
+        // to the classic anchor-top-left behaviour.
+        const anchorRight  = rightIsOuter && !leftIsOuter;
+        const anchorBottom = bottomIsOuter && !topIsOuter;
+
+        let width  = Math.max(MIN, r.width  + dw);
+        let height = Math.max(MIN, r.height + dh);
+        let x = anchorRight  ? r.x + (r.width  - width)  : r.x;
+        let y = anchorBottom ? r.y + (r.height - height) : r.y;
+
+        // Keep the window within the workarea — clamp whichever edge is free
+        // to move (the anchored edge is, by construction, already on it).
         if (wa) {
-            width  = Math.min(width,  wa.x + wa.width  - r.x);
-            height = Math.min(height, wa.y + wa.height - r.y);
+            if (anchorRight) { x = Math.max(x, wa.x); width  = (r.x + r.width)  - x; }
+            else width  = Math.min(width,  wa.x + wa.width  - x);
+
+            if (anchorBottom) { y = Math.max(y, wa.y); height = (r.y + r.height) - y; }
+            else height = Math.min(height, wa.y + wa.height - y);
         }
 
-        // Moving the far edge; snapped neighbours that share that edge follow via
+        // Snapped neighbours that share the moved edge follow via
         // WindowTracker's size-changed → _propagateResize.
-        win.move_resize_frame(true, r.x, r.y, width, height);
+        win.move_resize_frame(true, x, y, width, height);
     }
 
     _showHud() {

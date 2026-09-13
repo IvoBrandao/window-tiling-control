@@ -113,6 +113,38 @@ describe("SnapGroupsManager", () => {
             assert.equal(manager._displaySignalIds.length, 0);
             assert.equal(manager._wmSignalIds.length, 0);
         });
+
+        // Regression: enable() had no re-entrancy guard, so a second call
+        // while already enabled (session-mode changes can re-invoke
+        // enable/disable) built a second panel button — leaking the first
+        // one, orphaned in Main.panel._rightBox — and duplicated every
+        // display/workspace-manager signal connection.
+        it("is idempotent: calling enable() twice does not create a second button or duplicate signals", () => {
+            windowTracker = makeWindowTracker();
+            manager = new SnapGroupsManager(settings, windowTracker, animations, makeLogger());
+            manager.enable();
+            const button1 = manager._button;
+            const displayCount1 = manager._displaySignalIds.length;
+            const wmCount1 = manager._wmSignalIds.length;
+            const rightBoxChildren1 = Main.panel._rightBox._children.length;
+
+            manager.enable();
+
+            assert.equal(manager._button, button1, "must not build a second button");
+            assert.equal(manager._displaySignalIds.length, displayCount1);
+            assert.equal(manager._wmSignalIds.length, wmCount1);
+            assert.equal(Main.panel._rightBox._children.length, rightBoxChildren1,
+                "must not leak an orphaned button into the panel");
+        });
+
+        it("disable() then enable() again rebuilds cleanly", () => {
+            windowTracker = makeWindowTracker();
+            manager = new SnapGroupsManager(settings, windowTracker, animations, makeLogger());
+            manager.enable();
+            manager.disable();
+            assert.doesNotThrow(() => manager.enable());
+            assert.notEqual(manager._button, null);
+        });
     });
 
     describe("_refreshButton", () => {

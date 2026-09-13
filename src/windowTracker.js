@@ -37,6 +37,21 @@ export class WindowTracker {
 
         /** appId → { presetId, zoneIndex, monitorIndex } for relaunch restore. */
         this._persistMemory = new Map();
+
+        /**
+         * windowIds whose NEXT size-changed event should be treated as our own
+         * snap settling rather than a user resize. Many GTK apps (Files/
+         * Nautilus, Settings, Text Editor, …) enforce a minimum content size:
+         * when a zone is smaller than that minimum, Mutter clamps the actual
+         * frame to the app's minimum and fires size-changed with a geometry
+         * that differs from the zone we requested. Without this, that clamp
+         * was indistinguishable from a real manual resize, so it either
+         * unsnapped the window or shrank its tiled neighbours to compensate —
+         * every time such an app was tiled into a zone smaller than its
+         * minimum size.
+         * @type {Set<number>}
+         */
+        this._pendingSettle = new Set();
     }
 
     /**
@@ -99,6 +114,7 @@ export class WindowTracker {
         }
         this._windowSignals.clear();
         this._snapped.clear();
+        this._pendingSettle.clear();
     }
 
     setSnapAssist(snapAssist) {
@@ -125,6 +141,10 @@ export class WindowTracker {
 
         const entry = { presetId, zoneIndex, zoneRect, monitorIndex, workspaceIndex };
         this._snapped.set(windowId, entry);
+        // The very next size-changed for this window is expected to be our
+        // own move_resize_frame() settling (see field doc above) — arm it
+        // fresh on every (re)snap.
+        this._pendingSettle.add(windowId);
 
         this._log?.debug(
             `WindowTracker: snap win=${windowId} preset=${presetId} zone=${zoneIndex}`
@@ -166,6 +186,7 @@ export class WindowTracker {
         if (this._snapped.has(windowId)) {
             this._log?.debug(`WindowTracker: unsnap win=${windowId}`);
             this._snapped.delete(windowId);
+            this._pendingSettle.delete(windowId);
             this._notifyChange();
         }
     }
@@ -381,14 +402,37 @@ export class WindowTracker {
         const entry = this.getSnapEntry(metaWindow);
         if (!entry) return;
 
+        const windowId = metaWindow.get_id();
         const current = metaWindow.get_frame_rect();
         const r = entry.zoneRect;
         const tolerance = 30;
+
+        // Consume the settle flag on the first size-changed event no matter
+        // what — if we don't clear it here, a zone that happens to match the
+        // app's natural size (no visible drift on this event) would leave the
+        // flag armed indefinitely, and a LATER genuine user resize would then
+        // be silently swallowed as if it were the snap settling.
+        const isSettling = this._pendingSettle.delete(windowId);
 
         const resized = Math.abs(current.width  - r.width)  > tolerance ||
                         Math.abs(current.height - r.height) > tolerance;
 
         if (!resized) return;
+
+        if (isSettling) {
+            // Mutter clamped our requested zone to the app's own minimum
+            // size (common for GTK apps like Nautilus, Settings, Text
+            // Editor). Reconcile our tracked geometry to reality instead of
+            // unsnapping the window or shrinking its neighbours to compensate
+            // for a size change the user never asked for.
+            entry.zoneRect = makeRect({
+                x: current.x, y: current.y, width: current.width, height: current.height,
+            });
+            this._log?.debug(
+                `WindowTracker: win=${windowId} clamped to min-size on snap, reconciling zone rect`
+            );
+            return;
+        }
 
         const group = this.getSnapGroup(metaWindow);
         if (group.length < 2) {
@@ -572,6 +616,7 @@ export class WindowTracker {
             // Window is already unmanaged so we can't disconnect, just drop
             this._windowSignals.delete(windowId);
         }
+        this._pendingSettle.delete(windowId);
     }
 
     _getFilledZoneIndices(presetId, monitorIndex, workspaceIndex) {

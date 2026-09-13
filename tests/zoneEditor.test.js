@@ -135,6 +135,130 @@ describe("ZoneEditor._snapToGrid", () => {
         // snap(0.24, 4) = Math.round(0.96) / 4 = 1/4 = 0.25
         assert.equal(result.y, 0.25);
     });
+
+    // Regression: x and w (resp. y and h) are snapped independently, so a
+    // rect drawn right up against the monitor edge could previously round to
+    // x=1.0 with a nonzero minimum width, producing x+w > 1 — a zone that
+    // extends past the right/bottom edge of the monitor.
+    it("never lets a snapped zone's right edge extend past x=1", () => {
+        const result = editor._snapToGrid({ x: 0.999, y: 0, w: 0.001, h: 0.5 });
+        assert.ok(result.x + result.w <= 1 + 1e-9, `x+w = ${result.x + result.w}`);
+    });
+
+    it("never lets a snapped zone's bottom edge extend past y=1", () => {
+        const result = editor._snapToGrid({ x: 0, y: 0.999, w: 0.5, h: 0.001 });
+        assert.ok(result.y + result.h <= 1 + 1e-9, `y+h = ${result.y + result.h}`);
+    });
+});
+
+// ── Handle-drag (resize) tests ───────────────────────────────────────────────
+
+describe("ZoneEditor._applyHandleDrag", () => {
+    let editor;
+    const GEOM = { width: 1200, height: 800 };
+
+    beforeEach(() => {
+        setupGnomeGlobals();
+        // Grid resolution matched 1:1 to GEOM's pixel dimensions so
+        // _snapToGrid's rounding is exact for these whole-pixel test
+        // fixtures and doesn't obscure the anchor-math being tested.
+        editor = new ZoneEditor(
+            makeSettings({ zoneEditorGridColumns: GEOM.width, zoneEditorGridRows: GEOM.height }),
+            makeCustomZones(), makeZoneManager(), makeAnimations(), makeLogger()
+        );
+        editor._area = GEOM;
+        editor._canvas = { add_child: () => {}, remove_child: () => {} };
+    });
+
+    function makeZoneEntry(normRect) {
+        return {
+            normRect,
+            actor: { destroy: () => {}, set_position: () => {}, set_size: () => {} },
+            handles: [{ destroy: () => {} }],
+        };
+    }
+
+    it("dragging the right handle keeps the left edge anchored", () => {
+        const zone = makeZoneEntry({ x: 0.25, y: 0, w: 0.5, h: 1 });
+        editor._zones = [zone];
+        editor._draggingHandle = {
+            zone, edge: "r", startX: 600, startY: 0,
+            origRect: { ...zone.normRect },
+        };
+
+        editor._applyHandleDrag(720, 0, GEOM); // drag right by 120px = 0.1 normalized
+
+        assert.ok(Math.abs(zone.normRect.x - 0.25) < 1e-9, "left edge must not move");
+        assert.ok(Math.abs(zone.normRect.w - 0.6) < 1e-9, `width = ${zone.normRect.w}`);
+    });
+
+    it("dragging the left handle keeps the right edge anchored, even overshooting past the monitor edge", () => {
+        // Regression: naively clamping x to 0 without re-deriving w from the
+        // fixed right edge used to make the right edge jump outward by the
+        // overshoot amount instead of staying put.
+        const zone = makeZoneEntry({ x: 0.05, y: 0, w: 0.2, h: 1 }); // right edge at x=0.25
+        editor._zones = [zone];
+        editor._draggingHandle = {
+            zone, edge: "l", startX: 60, startY: 0,
+            origRect: { ...zone.normRect },
+        };
+
+        // Drag left by 180px (0.15 normalized) — overshoots past the left
+        // edge of the monitor (0.05 - 0.15 = -0.10).
+        editor._applyHandleDrag(-120, 0, GEOM);
+
+        assert.equal(zone.normRect.x, 0, "x must clamp to the monitor edge");
+        const right = zone.normRect.x + zone.normRect.w;
+        assert.ok(Math.abs(right - 0.25) < 1e-9,
+            `right edge must stay anchored at 0.25, got ${right}`);
+    });
+
+    it("dragging the top handle keeps the bottom edge anchored past the monitor edge", () => {
+        const zone = makeZoneEntry({ x: 0, y: 0.05, w: 1, h: 0.2 }); // bottom edge at y=0.25
+        editor._zones = [zone];
+        editor._draggingHandle = {
+            zone, edge: "t", startX: 0, startY: 40,
+            origRect: { ...zone.normRect },
+        };
+
+        editor._applyHandleDrag(0, -80, GEOM); // overshoot past the top edge
+
+        assert.equal(zone.normRect.y, 0);
+        const bottom = zone.normRect.y + zone.normRect.h;
+        assert.ok(Math.abs(bottom - 0.25) < 1e-9,
+            `bottom edge must stay anchored at 0.25, got ${bottom}`);
+    });
+
+    it("dragging the bottom-right corner grows both dimensions from the top-left anchor", () => {
+        const zone = makeZoneEntry({ x: 0.1, y: 0.1, w: 0.3, h: 0.3 });
+        editor._zones = [zone];
+        editor._draggingHandle = {
+            zone, edge: "br", startX: 0, startY: 0,
+            origRect: { ...zone.normRect },
+        };
+
+        editor._applyHandleDrag(120, 80, GEOM); // +0.1 width, +0.1 height
+
+        assert.ok(Math.abs(zone.normRect.x - 0.1) < 1e-9);
+        assert.ok(Math.abs(zone.normRect.y - 0.1) < 1e-9);
+        assert.ok(Math.abs(zone.normRect.w - 0.4) < 1e-9);
+        assert.ok(Math.abs(zone.normRect.h - 0.4) < 1e-9);
+    });
+
+    it("never shrinks a dimension below the minimum zone size", () => {
+        const zone = makeZoneEntry({ x: 0.4, y: 0, w: 0.2, h: 1 }); // 240px wide
+        editor._zones = [zone];
+        editor._draggingHandle = {
+            zone, edge: "r", startX: 0, startY: 0,
+            origRect: { ...zone.normRect },
+        };
+
+        // Drag the right handle far to the left — well past collapsing to 0.
+        editor._applyHandleDrag(-1000, 0, GEOM);
+
+        const widthPx = zone.normRect.w * GEOM.width;
+        assert.ok(widthPx >= 40 - 1e-6, `width in px = ${widthPx}, must stay >= MIN_ZONE_PX`);
+    });
 });
 
 // ── Zone CRUD Tests ──────────────────────────────────────────────────────────

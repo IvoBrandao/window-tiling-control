@@ -319,6 +319,66 @@ describe("WindowTracker — drift unsnap", () => {
     });
 });
 
+// ── _onWindowResized (min-size clamp settle vs. real drift) ──────────────────
+
+describe("WindowTracker — resize settle reconciliation", () => {
+    it("reconciles (does not unsnap) the first size-changed after a snap, even far outside tolerance", () => {
+        const { tracker, allWindows } = makeTracker(makeSettings(), makeZoneManager());
+
+        const win = makeWindow({ monitorIndex: 0, workspaceIndex: 0 });
+        register(allWindows, win);
+        tracker.snapWindow(win, "halves", 0, new Rect(0, 0, 960, 1080), false);
+
+        // Simulate Mutter clamping to the app's minimum content size (e.g.
+        // Nautilus) — much wider than the requested zone.
+        win.move_resize_frame(false, 0, 0, 1200, 1080);
+        tracker._onWindowResized(win);
+
+        const entry = tracker.getSnapEntry(win);
+        assert.ok(entry, "window should remain snapped");
+        assert.equal(entry.zoneRect.width, 1200, "tracked rect should reconcile to the clamped size");
+    });
+
+    it("does NOT reconcile a second, later size-changed — treats it as a real user resize", () => {
+        const { tracker, allWindows } = makeTracker(makeSettings(), makeZoneManager());
+
+        const winA = makeWindow({ monitorIndex: 0, workspaceIndex: 0 });
+        const winB = makeWindow({ monitorIndex: 0, workspaceIndex: 0 });
+        register(allWindows, winA, winB);
+        tracker.snapWindow(winA, "halves", 0, new Rect(0, 0, 960, 1080), false);
+        tracker.snapWindow(winB, "halves", 1, new Rect(960, 0, 960, 1080), false);
+
+        // First event after snap: consumed as settle (no-op resize here).
+        tracker._onWindowResized(winA);
+
+        // A later, genuine manual resize should unsnap (group has 2 members,
+        // so it should propagate instead of unsnapping outright).
+        winA.move_resize_frame(false, 0, 0, 700, 1080);
+        tracker._onWindowResized(winA);
+
+        const entryB = tracker.getSnapEntry(winB);
+        assert.ok(entryB, "neighbour should still be tracked");
+        assert.equal(entryB.zoneRect.x, 700, "neighbour should have been resized to close the gap");
+    });
+
+    it("solo window unsnaps on a genuine post-settle resize", () => {
+        const { tracker, allWindows } = makeTracker(makeSettings(), makeZoneManager());
+
+        const win = makeWindow({ monitorIndex: 0, workspaceIndex: 0 });
+        register(allWindows, win);
+        tracker.snapWindow(win, "halves", 0, new Rect(0, 0, 960, 1080), false);
+
+        // Consume the settle slot with a no-drift event.
+        tracker._onWindowResized(win);
+
+        // Now a real resize far outside tolerance.
+        win.move_resize_frame(false, 0, 0, 500, 1080);
+        tracker._onWindowResized(win);
+
+        assert.equal(tracker.getSnapEntry(win), null);
+    });
+});
+
 describe("WindowTracker persist (opt-in)", () => {
     beforeEach(() => setupGnomeGlobals());
 

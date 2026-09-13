@@ -18,6 +18,17 @@ import Clutter from "gi://Clutter";
  */
 const EFFECT_NAME = "wtc-rounded-corners";
 
+// Window types that should get rounded corners. Restricting this to NORMAL
+// alone excludes Settings panels, Nautilus/GTK4 file-chooser and properties
+// dialogs, and other regular CSD dialog windows — all of which are ordinary
+// top-level windows a user tiles and looks at just as often as an app's main
+// window, so they should not stand out with square corners.
+const ROUNDABLE_WINDOW_TYPES = new Set([
+    Meta.WindowType.NORMAL,
+    Meta.WindowType.DIALOG,
+    Meta.WindowType.MODAL_DIALOG,
+]);
+
 const ROUNDED_CORNERS_GLSL = `
 uniform float radius;
 uniform float width;
@@ -135,9 +146,9 @@ export class RoundedCorners {
     }
 
     _getAllWindows() {
-        return global.get_window_actors()
+        return (global.get_window_actors?.() ?? [])
             .map(a => a.meta_window)
-            .filter(w => w && w.get_window_type() === Meta.WindowType.NORMAL);
+            .filter(w => w && ROUNDABLE_WINDOW_TYPES.has(w.get_window_type()));
     }
 
     _applyToAll() {
@@ -146,7 +157,7 @@ export class RoundedCorners {
     }
 
     _removeFromAll() {
-        for (const actor of global.get_window_actors())
+        for (const actor of global.get_window_actors?.() ?? [])
             this._removeFromActor(actor);
     }
 
@@ -156,7 +167,7 @@ export class RoundedCorners {
     }
 
     _applyToWindow(metaWindow) {
-        if (!metaWindow || metaWindow.get_window_type() !== Meta.WindowType.NORMAL)
+        if (!metaWindow || !ROUNDABLE_WINDOW_TYPES.has(metaWindow.get_window_type()))
             return;
 
         // Don't round maximized or fullscreen windows
@@ -206,14 +217,22 @@ export class RoundedCorners {
                 );
             } catch (_) {}
 
-            actor.connect("destroy", () => {
-                if (actor._wtcRCSignals) {
-                    for (const id of actor._wtcRCSignals) {
-                        try { metaWindow.disconnect(id); } catch (_) {}
+            // Guard the "destroy" hookup with its own flag, separate from
+            // _wtcRCSignals: disable() nulls _wtcRCSignals on every
+            // enable/disable cycle, and without this flag a window that
+            // survives multiple cycles would re-enter this `if` block each
+            // time and accumulate one extra "destroy" listener per cycle.
+            if (!actor._wtcRCDestroyHooked) {
+                actor._wtcRCDestroyHooked = true;
+                actor.connect("destroy", () => {
+                    if (actor._wtcRCSignals) {
+                        for (const id of actor._wtcRCSignals) {
+                            try { metaWindow.disconnect(id); } catch (_) {}
+                        }
+                        actor._wtcRCSignals = null;
                     }
-                    actor._wtcRCSignals = null;
-                }
-            });
+                });
+            }
         }
     }
 

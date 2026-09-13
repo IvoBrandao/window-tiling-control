@@ -151,31 +151,61 @@ export class SnapAssist {
         scrollBox.add_child(thumbBox);
         overlay.add_child(scrollBox);
 
-        // Position centered inside the zone rect
-        const r = zone.rect;
-        const maxW = Math.min(THUMB_W + 24, r.width - 20);
-        const maxH = Math.min((THUMB_H + 8) * Math.min(displayed.length, 3) + 40, r.height - 20);
+        // Size for comfort, not to fit inside whatever zone happens to be
+        // left over. Zones from thirds/quarters/sixths layouts can be much
+        // smaller than a usable picker — clamping the overlay to the zone's
+        // own bounds (the old behaviour) squeezed both the visible thumbnails
+        // and their clickable area down to the point where they were hard to
+        // even hit. This is a transient overlay, not a placed window, so it's
+        // fine for it to extend past the zone's edges as long as it stays on
+        // the monitor — only the monitor's workarea bounds constrain it.
+        const rows = Math.min(displayed.length, 3) + (unsnapped.length > MAX_THUMBNAILS ? 1 : 0);
+        const desiredW = THUMB_W + 24;
+        const desiredH = (THUMB_H + 8) * Math.max(rows, 1) + 40;
+
+        const workarea = this._zoneManager._getWorkarea?.(monitorIndex)
+            ?? global.display.get_monitor_geometry(monitorIndex);
+
+        const maxW = Math.min(desiredW, Math.max(workarea.width - 24, THUMB_W + 24));
+        const maxH = Math.min(desiredH, Math.max(workarea.height - 24, THUMB_H + 40));
         overlay.width  = maxW;
         overlay.height = maxH;
 
+        // Anchor centered over the zone, then clamp to the workarea so the
+        // (possibly larger-than-the-zone) overlay never runs off-screen.
+        const r = zone.rect;
+        let px = Math.round(r.x + (r.width - maxW) / 2);
+        let py = Math.round(r.y + (r.height - maxH) / 2);
+        px = Math.max(workarea.x + 4, Math.min(px, workarea.x + workarea.width - maxW - 4));
+        py = Math.max(workarea.y + 4, Math.min(py, workarea.y + workarea.height - maxH - 4));
+
         Main.uiGroup.add_child(overlay);
-        overlay.set_position(
-            Math.round(r.x + (r.width - maxW) / 2),
-            Math.round(r.y + (r.height - maxH) / 2)
-        );
+        overlay.set_position(px, py);
         this._animations.slideIn(overlay, 0, 12);
 
         return overlay;
     }
 
     _buildThumbnail(metaWindow, presetId, monitorIndex, workspaceIndex, zone) {
+        // Fixed size regardless of the source window's aspect ratio — a very
+        // thin or short window used to scale down to a sliver-sized clone,
+        // shrinking the clickable area along with it. The clone/fallback is
+        // centered inside this fixed-size button instead, so the hit target
+        // is always a full THUMB_W × THUMB_H rectangle.
         const btn = new St.Button({
             style_class: "wtc-snap-assist-thumb",
             reactive: true,
             can_focus: true,
+            width: THUMB_W,
+            height: THUMB_H,
         });
 
-        const inner = new St.BoxLayout({ vertical: false });
+        const inner = new St.Bin({
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
+            y_expand: true,
+        });
 
         // Try Clutter.Clone of window actor
         const winActor = metaWindow.get_compositor_private();
@@ -192,13 +222,13 @@ export class SnapAssist {
                     width:  Math.max(Math.round(sw * scale), 1),
                     height: Math.max(Math.round(sh * scale), 1),
                 });
-                inner.add_child(clone);
+                inner.set_child(clone);
             } catch (_) {
-                inner.add_child(this._buildFallbackThumb(metaWindow));
+                inner.set_child(this._buildFallbackThumb(metaWindow));
             }
         } else {
             // No mapped compositor actor (minimized/other workspace) — icon only.
-            inner.add_child(this._buildFallbackThumb(metaWindow));
+            inner.set_child(this._buildFallbackThumb(metaWindow));
         }
 
         btn.set_child(inner);

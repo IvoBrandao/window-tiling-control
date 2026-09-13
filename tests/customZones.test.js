@@ -75,7 +75,12 @@ class CustomZoneStoreShim {
     }
 
     generateId() {
-        return `custom-${Date.now()}`;
+        const base = `custom-${Date.now()}`;
+        const all = this.getAll();
+        if (!all.some(s => s.id === base)) return base;
+        let n = 1;
+        while (all.some(s => s.id === `${base}-${n}`)) n++;
+        return `${base}-${n}`;
     }
 
     _load() {
@@ -199,11 +204,32 @@ describe("CustomZoneStore", () => {
             assert.ok(store.generateId().startsWith("custom-"));
         });
 
-        it("generates unique ids on repeated calls", () => {
+        it("generates unique ids on repeated calls, even when each is immediately persisted", () => {
             const store = makeStore();
-            const ids = new Set(Array.from({ length: 10 }, () => store.generateId()));
-            // Allow some collisions within same ms, but at least 1 should be unique
-            assert.ok(ids.size >= 1);
+            const ids = new Set();
+            for (let i = 0; i < 10; i++) {
+                const id = store.generateId();
+                ids.add(id);
+                store.addZoneSet({ id, label: `Set ${i}`, zones: [] });
+            }
+            assert.equal(ids.size, 10);
+            assert.equal(store.getAll().length, 10);
+        });
+
+        it("disambiguates ids colliding within the same millisecond", () => {
+            // Regression test: generateId() used to be a bare `custom-${Date.now()}`,
+            // so two sets created in the same millisecond collided; addZoneSet()
+            // silently drops anything whose id already exists, so the second
+            // zone set would vanish without any error.
+            const store = makeStore();
+            const id1 = store.generateId();
+            store.addZoneSet({ id: id1, label: "First", zones: [] });
+
+            const id2 = store.generateId();
+            assert.notEqual(id2, id1, "second generated id must differ from an id already in the store");
+            store.addZoneSet({ id: id2, label: "Second", zones: [] });
+
+            assert.equal(store.getAll().length, 2);
         });
     });
 });

@@ -23,10 +23,17 @@ export class SnapGroupsManager {
         this._popupVisible = false;
         this._displaySignalIds = [];
         this._wmSignalIds = [];
+        this._enabled = false;
     }
 
     enable() {
+        // Session-mode changes can re-invoke enable() while already enabled;
+        // without this guard a second call would build a duplicate panel
+        // button (leaking the first one, orphaned in Main.panel._rightBox)
+        // and double up every display/workspace-manager signal connection.
+        if (this._enabled) return;
         if (!this._settings.snapGroupsEnabled) return;
+        this._enabled = true;
 
         this._buildButton();
 
@@ -50,6 +57,9 @@ export class SnapGroupsManager {
     }
 
     disable() {
+        if (!this._enabled) return;
+        this._enabled = false;
+
         this._closePopup();
 
         for (const id of this._displaySignalIds)
