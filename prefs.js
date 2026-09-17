@@ -29,7 +29,12 @@ const KB_SCHEMA_ID = "org.gnome.shell.extensions.window-tiling-control.keybindin
 // KB_GROUPS should cover every registered keybinding so users always have a
 // way to see/rebind it from the preferences window — including the
 // "unbound by default" advanced zone shortcuts.
-const KB_GROUPS = [
+// Built lazily (not at module load) because gettext() is only callable once
+// the extension context is active — a bare top-level `const KB_GROUPS = [...]`
+// evaluates at import time and throws "gettext can only be called from
+// extensions" when the preferences window is opened.
+function getKbGroups() {
+    return [
     {
         title: _("Window Tiling"),
         description: _("Super + arrow key snaps the focused window. Quarter-tiled windows navigate between quarters first."),
@@ -71,7 +76,7 @@ const KB_GROUPS = [
         ],
     },
     {
-        title: _("Focus & Auto-Tile"),
+        title: _("Focus &amp; Auto-Tile"),
         description: _("Cycle focus between tiled windows or auto-tile all visible windows into the active grid layout."),
         rows: [
             { key: "focus-cycle-tiled", label: _("Cycle Focus (Tiled Windows)"), desc: _("Move focus to the next snapped window") },
@@ -79,7 +84,7 @@ const KB_GROUPS = [
         ],
     },
     {
-        title: _("Modes & Help"),
+        title: _("Modes &amp; Help"),
         description: _("Enter keyboard resize mode, or hold to reveal a shortcut cheat sheet."),
         rows: [
             { key: "toggle-resize-mode", label: _("Keyboard Resize Mode"),    desc: _("Arrow keys resize the focused window; Escape/Enter to exit") },
@@ -95,7 +100,7 @@ const KB_GROUPS = [
         ],
     },
     {
-        title: _("Layout & Overlay"),
+        title: _("Layout &amp; Overlay"),
         description: _("Shortcuts for layout management and the snap overlay."),
         rows: [
             { key: "open-snap-overlay",  label: _("Open Snap Layout Picker"), desc: _("Show the Super+Z layout chooser popup") },
@@ -114,12 +119,15 @@ const KB_GROUPS = [
             desc: _("Snap the focused window directly into zone %d of the active layout").replace("%d", String(n)),
         })),
     },
-];
+    ];
+}
 
 /** Flat lookup of keybinding key → human label, used for conflict warnings. */
-const KB_LABEL_BY_KEY = Object.fromEntries(
-    KB_GROUPS.flatMap(group => group.rows.map(row => [row.key, row.label]))
-);
+function getKbLabelByKey() {
+    return Object.fromEntries(
+        getKbGroups().flatMap(group => group.rows.map(row => [row.key, row.label]))
+    );
+}
 
 export default class WindowTilingControlPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -303,7 +311,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
         });
 
         // Build a group per category
-        for (const section of KB_GROUPS) {
+        for (const section of getKbGroups()) {
             const group = new Adw.PreferencesGroup({
                 title: section.title,
                 description: section.description,
@@ -328,7 +336,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
             css_classes: ["destructive-action"],
         });
         resetBtn.connect("clicked", () => {
-            for (const section of KB_GROUPS)
+            for (const section of getKbGroups())
                 for (const { key } of section.rows)
                     kbSettings.reset(key);
             // Rebuild the page to refresh all labels
@@ -685,7 +693,7 @@ export default class WindowTilingControlPreferences extends ExtensionPreferences
 
             const conflictKey = this._findKeybindingConflict(kbSettings, canonical, key);
             if (conflictKey && pendingConflictKey !== conflictKey) {
-                const conflictLabel = KB_LABEL_BY_KEY[conflictKey] ?? conflictKey;
+                const conflictLabel = getKbLabelByKey()[conflictKey] ?? conflictKey;
                 statusLabel.set_text(
                     _("Already used by \"%s\". Click Apply again to move it here.").replace("%s", conflictLabel)
                 );
